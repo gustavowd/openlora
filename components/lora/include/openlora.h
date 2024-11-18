@@ -110,7 +110,9 @@ BaseType_t ol_release_net_if_buffer(net_if_buffer_descriptor_t *buffer);
 BaseType_t ol_get_number_of_free_net_if_buffer(void);
 
 BaseType_t ol_to_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
+/*
 BaseType_t ol_from_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
+*/
 
 int ol_transp_open(transport_layer_t *client_server);
 int ol_transp_close(transport_layer_t *server_client);

@@ -247,12 +247,11 @@ uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if
     return pdFALSE;
 }
 
-uint32_t ol_send_link_ack(net_if_buffer_descriptor_t *net_if_buffer, uint32_t timeout) {
+uint32_t ol_send_link_ack(link_layer_header_t *link_frame, uint32_t timeout) {
     /* todo: analisar o ol_get_net_if_buffer para o ol_send_link_ack */
     net_if_buffer_descriptor_t *net_if_ack_buffer = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t), MAX_NET_IF_DESCRIPTORS_WAIT_TIME_MS);
 
     if (net_if_ack_buffer != NULL){
-        link_layer_header_t *link_frame = (link_layer_header_t *)net_if_buffer->puc_link_buffer;
         link_layer_header_t *link_ack_packet = (link_layer_header_t *)net_if_ack_buffer->puc_link_buffer;
 
         link_ack_packet->frame_type = ACK_FRAME;
@@ -285,7 +284,7 @@ void ol_receive_link_frame(uint32_t timeout){
                 uint16_t crc = usLORACRC16(net_if_buffer->puc_link_buffer, (net_if_buffer->data_length - sizeof(link_layer_trailer_t)));
                 if (link_frame_trailer->crc == crc) {
                     if ((link_frame_header->frame_type == DATA_FRAME) && (link_frame_header->network_id == openlora.nwk_id) && (link_frame_header->dst_addr == openlora.node_addr)) {
-                        if (ol_send_link_ack(net_if_buffer, LINK_ACK_TIMEOUT) == pdTRUE) {
+                        if (ol_send_link_ack(link_frame_header, LINK_ACK_TIMEOUT) == pdTRUE) {
                             if (openlora.neigh_seq_number[link_frame_header->src_addr] != link_frame_header->seq_number) {
                                 openlora.neigh_seq_number[link_frame_header->src_addr] = link_frame_header->seq_number;
                                 if (xQueueSendToBack(rx_link_layer_queue, &net_if_buffer, timeout) == pdTRUE) {
@@ -327,13 +326,15 @@ void ol_receive_link_frame(uint32_t timeout){
     }
 }
 
+
 BaseType_t ol_to_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
     return xQueueSendToBack(tx_link_layer_queue, &buffer, timeout);
 }
-
+/*
 BaseType_t ol_from_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
     return xQueueReceive(rx_link_layer_queue, buffer, timeout);
 }
+*/
 
 void ol_link_layer_task(void *arg) {
     // esperar pacotes das camadas superiores
@@ -375,7 +376,7 @@ void ol_link_layer_task(void *arg) {
         xActivatedMember = xQueueSelectFromSet( link_event, portMAX_DELAY);
 
         if( xActivatedMember == tx_link_layer_queue ){
-            // Transmitt a frame
+            // Transmit a frame
             net_if_buffer_descriptor_t *frame;
             BaseType_t space = uxQueueSpacesAvailable(tx_link_layer_queue);
             ESP_LOGI(TAG, "Available space in the link layer RX queue: %d", space);
@@ -580,14 +581,15 @@ int ol_transp_close(transport_layer_t *server_client){
 
 int ol_transp_recv(transport_layer_t *server_client, uint8_t *buffer, TickType_t timeout){
     // Wait for the semaphore
-    net_if_buffer_descriptor_t *datagram = NULL;
-    if (xQueueReceive(server_client->transp_wakeup, &datagram, timeout) == pdTRUE){
+    net_if_buffer_descriptor_t *datagram_or_segment = NULL;
+    if (xQueueReceive(server_client->transp_wakeup, &datagram_or_segment, timeout) == pdTRUE){
         // something was receive
-        transport_layer_header_t *transp_header = (transport_layer_header_t *)&datagram->puc_link_buffer[sizeof(link_layer_header_t)];
-        uint8_t *payload = &datagram->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
+        /*todo: receiving a datagram. How to receive a segment? Different transport header? */
+        transport_layer_header_t *transp_header = (transport_layer_header_t *)&datagram_or_segment->puc_link_buffer[sizeof(link_layer_header_t)];
+        uint8_t *payload = &datagram_or_segment->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
         memcpy(buffer, payload,transp_header->payload_size);
         int len = transp_header->payload_size;
-        ol_release_net_if_buffer(datagram);
+        ol_release_net_if_buffer(datagram_or_segment);
         return len;
     }
 	return pdFAIL;

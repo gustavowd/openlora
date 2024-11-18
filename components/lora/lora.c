@@ -559,7 +559,7 @@ static void RxChainCalibration( long frequency )
 /**
  * Perform hardware initialization.
  */
-int lora_init(uint8_t datarate, long frequency, int8_t power_level, bool pa_boost, bool enable_crc, bool enable_explicit_header)
+int lora_init(uint8_t datarate, int coding_rate, long frequency, int8_t power_level, bool pa_boost, bool enable_crc, bool enable_explicit_header)
 {
    esp_err_t ret;
 
@@ -634,7 +634,7 @@ int lora_init(uint8_t datarate, long frequency, int8_t power_level, bool pa_boos
 
    lora_set_tx_power(power_level, pa_boost);
 
-   lora_set_coding_rate(5);
+   lora_set_coding_rate(coding_rate);
    lora_set_preamble_length(8);
 
    // DR 0 - SF12 / 125kHz - phy bit/sec = 250 - max mac payload = 51 - tempo de transmissão do payload máximo = 2793,5​ms

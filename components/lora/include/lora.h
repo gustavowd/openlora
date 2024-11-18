@@ -40,7 +40,7 @@ void lora_set_preamble_length(long length);
 void lora_set_sync_word(int sw);
 void lora_enable_crc(void);
 void lora_disable_crc(void);
-int lora_init(uint8_t datarate, long frequency, int8_t power_level, bool pa_boost, bool enable_crc, bool enable_explicit_header);
+int lora_init(uint8_t datarate, int coding_rate, long frequency, int8_t power_level, bool pa_boost, bool enable_crc, bool enable_explicit_header);
 uint32_t lora_cca(void);
 uint32_t lora_send_frame(uint8_t *buf, int size, uint32_t timeout);
 int lora_read_frame(uint8_t *buf, int size);

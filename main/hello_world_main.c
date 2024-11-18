@@ -144,6 +144,7 @@ void task_test_SSD1306i2c(void *ignore) {
 
 }
 
+#if MODE == TRANSMITTER
 const char *file;
 void lora_transmit_task(void *param) {
     (void)param;
@@ -206,7 +207,9 @@ void lora_transmit_task(void *param) {
         vTaskDelay(1000);
     }
 }
+#endif
 
+#if MODE == RECEIVER
 void lora_receive_task(void *param) {
     (void)param;
     static const char *TAG = "lora_rx";
@@ -289,6 +292,7 @@ void lora_receive_task_3(void *param) {
         }
     }
 }
+#endif
 
 void app_main()
 {
@@ -311,14 +315,14 @@ void app_main()
             (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
 
    // Tarefas lora
-   // Init LoRa with datarate 4
-   if (lora_init(4, CHANNEL_0, 20, true, true, true)) {
+   // Init LoRa with datarate 4, coding rate 5, channel 0, power level 20dBm, with PA Boost, CRC and explicit header
+   if (lora_init(4, 5, CHANNEL_0, 20, true, true, true)) {
         // init openlora stack
         #if MODE == RECEIVER
         if (ol_init(1, OL_BORDER_ROUTER_ADDR) == pdTRUE){
-            xTaskCreate(lora_receive_task, "task_lora_tx", 3072, NULL, 4, NULL);
-            xTaskCreate(lora_receive_task_2, "task_lora_tx", 2048, NULL, 4, NULL);
-            xTaskCreate(lora_receive_task_3, "task_lora_tx", 2048, NULL, 4, NULL);
+            xTaskCreate(lora_receive_task, "task_lora_rx1", 3072, NULL, 4, NULL);
+            xTaskCreate(lora_receive_task_2, "task_lora_rx2", 2048, NULL, 4, NULL);
+            xTaskCreate(lora_receive_task_3, "task_lora_rx3", 2048, NULL, 4, NULL);
         }
         #else
         if (ol_init(1, 1) == pdTRUE) {
