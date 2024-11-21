@@ -12,9 +12,9 @@
 
 /* The maximum number of retries for the example code. */
 #define BACKOFF_RETRY_MAX_ATTEMPTS      LINK_RETRIES + 1
-/* The base back-off delay (in milliseconds) for retry configuration in the example. */
+/* The base back-off delay (in milliseconds) for retry configuration. */
 #define RETRY_BACKOFF_BASE_MS           ( ((256U*10U*8U)/125U) )
-/* The maximum back-off delay (in milliseconds) for between retries in the example. */
+/* The maximum back-off delay (in milliseconds) for between retries. */
 #define RETRY_MAX_BACKOFF_DELAY_MS      ( RETRY_BACKOFF_BASE_MS*4U )
 
 #define OL_TRANSPORT_CLIENT_PORT_INIT         0x80
@@ -38,6 +38,7 @@ typedef struct
     QueueHandle_t   packet_ack;
 	uint8_t         data_length; 			/* Holds the total frame length */
     uint8_t         dst_addr;
+    uint8_t         pad[2];
 } net_if_buffer_descriptor_t;
 
 typedef enum __attribute__((packed)) {

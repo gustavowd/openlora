@@ -1,0 +1,42 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "~/esp/esp-idf-v5.1.1/components/esp_system/include/**",
+                "~/esp/esp-idf-v5.1.1/components/log/include/**",
+                "~/esp/esp-idf-v5.1.1/components/freertos/FreeRTOS-Kernel/include/**",
+                "~/esp/esp-idf-v5.1.1/components/freertos/esp_additions/include/freertos/**",
+                "~/esp/esp-idf-v5.1.1/components/esp_ringbuf/include/**",
+                "~/esp/esp-idf-v5.1.1/components/freertos/esp_additions/arch/xtensa/include/**",
+                "~/esp/esp-idf-v5.1.1/components/freertos/FreeRTOS-Kernel/portable/xtensa/include/**",
+                "~/esp/esp-idf-v5.1.1/components/xtensa/include/**",
+                "~/esp/esp-idf-v5.1.1/components/xtensa/esp32/include/**",
+                "~/esp/esp-idf-v5.1.1/components/newlib/platform_include/**",
+                "~/esp/esp-idf-v5.1.1/components/esp_hw_support/include/**",
+                "~/esp/esp-idf-v5.1.1/components/esp_common/include/**",
+                "~/esp/esp-idf-v5.1.1/components/spi_flash/include/**",
+                "~/esp/esp-idf-v5.1.1/components/hal/include/**",
+                "~/esp/esp-idf-v5.1.1/components/driver/gpio/include/**",
+                "~/esp/esp-idf-v5.1.1/components/soc/esp32/include/**",
+                "~/esp/esp-idf-v5.1.1/components/esp_rom/include/**",
+                "~/esp/esp-idf-v5.1.1/components/driver/spi/include/**",
+                "~/esp/esp-idf-v5.1.1/components/driver/i2c/include/**",
+                "~/esp/esp-idf-v5.1.1/components/driver/uart/include/**",
+                "~/esp/esp-idf-v5.1.1/components/driver/sdmmc/include/**",
+                "~/esp/esp-idf-v5.1.1/components/sdmmc/include/**",
+                "~/esp/esp-idf-v5.1.1/components/fatfs/vfs/**",
+                "~/esp/esp-idf-v5.1.1/components/fatfs/src/**",
+                "~/esp/esp-idf-v5.1.1/components/wear_levelling/include/**",
+                "~/esp/esp-idf-v5.1.1/components/esp_partition/include/**"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c17",
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "linux-gcc-x64"
+        }
+    ],
+    "version": 4
+}

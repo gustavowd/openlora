@@ -240,7 +240,7 @@ void
 lora_reset(void)
 {
    gpio_set_level(CONFIG_RST_GPIO, 0);
-   vTaskDelay(pdMS_TO_TICKS(1));
+   vTaskDelay(pdMS_TO_TICKS(2));
    gpio_set_level(CONFIG_RST_GPIO, 1);
    vTaskDelay(pdMS_TO_TICKS(10));
 }
