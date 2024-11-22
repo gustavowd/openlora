@@ -53,7 +53,7 @@ static SemaphoreHandle_t    link_layer_tx_ready_signal;
 static QueueHandle_t        tx_transp_layer_queue;
 static QueueHandle_t        rx_transp_layer_queue;
 
-BaseType_t ol_init_net_if_buffers(void){
+static BaseType_t ol_init_net_if_buffers(void){
     for (int i=0; i<NUMBER_OF_NET_IF_DESCRIPTORS; i++) {
         net_if_buffer_descriptors[i].puc_link_buffer = NULL;
         net_if_buffer_descriptors[i].packet_ack = NULL;
@@ -68,8 +68,48 @@ BaseType_t ol_init_net_if_buffers(void){
     return pdFAIL;
 }
 
-void ol_link_layer_task(void *arg);
-void ol_transport_layer_task(void *arg);
+static net_if_buffer_descriptor_t *ol_get_net_if_buffer(uint8_t size, uint32_t timeout){
+    if (xSemaphoreTake(ol_available_network_buffer, timeout) == pdTRUE){
+        if (xSemaphoreTake(ol_network_buffer_mutex, timeout) == pdTRUE){
+            for (int i=0; i<NUMBER_OF_NET_IF_DESCRIPTORS; i++) {
+                if (net_if_buffer_descriptors[i].puc_link_buffer == NULL) {
+                    net_if_buffer_descriptors[i].puc_link_buffer = pvPortMalloc(size);
+                    net_if_buffer_descriptors[i].data_length = size;
+                    xSemaphoreGive(ol_network_buffer_mutex);
+                    return &net_if_buffer_descriptors[i];
+                }
+            }
+            xSemaphoreGive(ol_network_buffer_mutex);
+        }else {
+            xSemaphoreGive(ol_available_network_buffer);
+        }
+    }
+    return NULL;
+}
+
+static BaseType_t ol_release_net_if_buffer(net_if_buffer_descriptor_t *buffer){
+    if (xSemaphoreTake(ol_network_buffer_mutex, RELEASE_NET_IF_BUFFER_TIMEOUT) == pdTRUE){
+        buffer->data_length = 0;
+        buffer->dst_addr = 0xFF;
+        vPortFree(buffer->puc_link_buffer);
+        if (buffer->packet_ack != NULL){
+            buffer->packet_ack = NULL;
+        }
+        buffer->puc_link_buffer = NULL;
+        xSemaphoreGive(ol_available_network_buffer);
+        xSemaphoreGive(ol_network_buffer_mutex);
+        return pdPASS;
+    }
+    return pdFAIL;
+}
+
+static BaseType_t ol_get_number_of_free_net_if_buffer(void){
+    return uxSemaphoreGetCount( ol_available_network_buffer );
+}
+
+// Task prototypes in order to install them
+static void ol_link_layer_task(void *arg);
+static void ol_transport_layer_task(void *arg);
 
 BaseType_t ol_init(uint8_t nwk_id, uint8_t addr) {
     if (ol_init_net_if_buffers() == pdFAIL) {
@@ -96,48 +136,13 @@ BaseType_t ol_init(uint8_t nwk_id, uint8_t addr) {
     return pdPASS;
 }
 
-net_if_buffer_descriptor_t *ol_get_net_if_buffer(uint8_t size, uint32_t timeout){
-    if (xSemaphoreTake(ol_available_network_buffer, timeout) == pdTRUE){
-        if (xSemaphoreTake(ol_network_buffer_mutex, timeout) == pdTRUE){
-            for (int i=0; i<NUMBER_OF_NET_IF_DESCRIPTORS; i++) {
-                if (net_if_buffer_descriptors[i].puc_link_buffer == NULL) {
-                    net_if_buffer_descriptors[i].puc_link_buffer = pvPortMalloc(size);
-                    net_if_buffer_descriptors[i].data_length = size;
-                    xSemaphoreGive(ol_network_buffer_mutex);
-                    return &net_if_buffer_descriptors[i];
-                }
-            }
-            xSemaphoreGive(ol_network_buffer_mutex);
-        }else {
-            xSemaphoreGive(ol_available_network_buffer);
-        }
-    }
-    return NULL;
-}
+/************************************************************************************************************************
+ * 
+ *          Link Layler Functions
+ * 
+ ************************************************************************************************************************/
 
-BaseType_t ol_release_net_if_buffer(net_if_buffer_descriptor_t *buffer){
-    //taskENTER_CRITICAL();
-    if (xSemaphoreTake(ol_network_buffer_mutex, RELEASE_NET_IF_BUFFER_TIMEOUT) == pdTRUE){
-        buffer->data_length = 0;
-        buffer->dst_addr = 0xFF;
-        vPortFree(buffer->puc_link_buffer);
-        if (buffer->packet_ack != NULL){
-            buffer->packet_ack = NULL;
-        }
-        buffer->puc_link_buffer = NULL;
-        xSemaphoreGive(ol_available_network_buffer);
-        xSemaphoreGive(ol_network_buffer_mutex);
-        return pdPASS;
-    }
-    return pdFAIL;
-    //taskEXIT_CRITICAL();
-}
-
-BaseType_t ol_get_number_of_free_net_if_buffer(void){
-    return uxSemaphoreGetCount( ol_available_network_buffer );
-}
-
-uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if_buffer, uint32_t timeout){
+static uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if_buffer, uint32_t timeout){
     link_layer_header_t *link_frame = (link_layer_header_t *)net_if_buffer->puc_link_buffer;
 
     link_frame->frame_type = DATA_FRAME;
@@ -271,7 +276,7 @@ static uint32_t ol_send_link_ack(link_layer_header_t *link_frame, uint32_t timeo
     return pdFAIL;
 }
 
-void ol_receive_link_frame(uint32_t timeout){
+static void ol_receive_link_frame(uint32_t timeout){
     if (lora_received(timeout) == pdTRUE) {
         int len = lora_read_frame_size();
         /* todo: analisar o ol_get_net_if_buffer em ol_receive_link_frame */
@@ -327,15 +332,15 @@ void ol_receive_link_frame(uint32_t timeout){
 }
 
 
-BaseType_t ol_to_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
+static BaseType_t ol_to_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
     return xQueueSendToBack(tx_link_layer_queue, &buffer, timeout);
 }
 
-BaseType_t ol_from_link_layer(net_if_buffer_descriptor_t **buffer, TickType_t timeout) {
+static BaseType_t ol_from_link_layer(net_if_buffer_descriptor_t **buffer, TickType_t timeout) {
     return xQueueReceive(rx_link_layer_queue, buffer, timeout);
 }
 
-void ol_link_layer_task(void *arg) {
+static void ol_link_layer_task(void *arg) {
     // esperar pacotes das camadas superiores
     // chegou um pacote do radio
     // transmitir um pacote (cca, csma/ca, retentativas, ack, ...)
@@ -410,7 +415,14 @@ void ol_link_layer_task(void *arg) {
     }
 }
 
-void ol_transp_include_client_or_server(transport_layer_t *client_server) {
+
+/************************************************************************************************************************
+ * 
+ *          Transport Layler Functions
+ * 
+ ************************************************************************************************************************/
+
+static void ol_transp_include_client_or_server(transport_layer_t *client_server) {
     if(transp_list_tail != NULL){
         /* Insert server/client into list */
         transp_list_tail->next = client_server;
@@ -427,7 +439,7 @@ void ol_transp_include_client_or_server(transport_layer_t *client_server) {
     }
 }
 
-void ol_transp_remove_client_or_server(transport_layer_t *client_server) {
+static void ol_transp_remove_client_or_server(transport_layer_t *client_server) {
 	if(client_server == transp_list_head){
 	  if(client_server == transp_list_tail){
 		transp_list_head = NULL;
@@ -450,7 +462,7 @@ void ol_transp_remove_client_or_server(transport_layer_t *client_server) {
 	}
 }
 
-BaseType_t ol_transp_layer_receive_packet(net_if_buffer_descriptor_t *packet){
+static BaseType_t ol_transp_layer_receive_packet(net_if_buffer_descriptor_t *packet){
     // analyze the transport layer header
     // analisar o protocolo
     // varrer a lista de objetos da camada de transporte
@@ -483,15 +495,17 @@ BaseType_t ol_transp_layer_receive_packet(net_if_buffer_descriptor_t *packet){
     return pdFAIL;
 }
 
-BaseType_t ol_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
+static BaseType_t ol_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
     return xQueueSendToBack(tx_transp_layer_queue, &buffer, timeout);
 }
 
-BaseType_t ol_from_transport_layer(net_if_buffer_descriptor_t **buffer, TickType_t timeout) {
+/*
+static BaseType_t ol_from_transport_layer(net_if_buffer_descriptor_t **buffer, TickType_t timeout) {
     return xQueueReceive(rx_transp_layer_queue, buffer, timeout);
 }
+*/
 
-void ol_transport_layer_task(void *arg) {
+static void ol_transport_layer_task(void *arg) {
     // esperar pacotes das camadas superiores (em geral, aplicação)
     // encaminha pacotes da camada de rede e/ou enlace para as tasks usando a camada de transporte
     // opcional transmitir um pacote (retentativas, ack, ...)
