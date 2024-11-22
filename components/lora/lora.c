@@ -294,7 +294,7 @@ lora_sleep(void)
  * Incoming frames will be received.
  */
 void 
-lora_receive(void)
+lora_enter_receive_mode(void)
 {
    lora_write_reg( REG_INVERT_IQ, ( ( lora_read_reg( REG_INVERT_IQ ) & RFLR_INVERTIQ_TX_MASK & RFLR_INVERTIQ_RX_MASK ) | RFLR_INVERTIQ_RX_ON | RFLR_INVERTIQ_TX_OFF ) );
    lora_write_reg( REG_INVERT_IQ2, RFLR_INVERTIQ2_ON );
@@ -884,7 +884,7 @@ int lora_read_frame_size(void)
 /**
  * Returns non-zero if there is data to read (frame received).
  */
-int lora_received(uint32_t timeout)
+int is_lora_frame_received(uint32_t timeout)
 {
    return (int)xSemaphoreTake(lora_sem_rx, timeout);
 }

@@ -213,8 +213,8 @@ static uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t 
         if (ret == pdTRUE) {
             // wait for the ack
             ESP_LOGI(OPEN_LORA_TAG, "Waiting ACK");
-            lora_receive();    // put into receive mode
-            if (lora_received(LINK_ACK_TIMEOUT) == pdTRUE) {
+            lora_enter_receive_mode();    // put into receive mode
+            if (is_lora_frame_received(LINK_ACK_TIMEOUT) == pdTRUE) {
                 int len = lora_read_frame_size();
                 if (len >= (sizeof(link_layer_header_t) + sizeof(link_layer_trailer_t))) {
                     /* todo: analisar ol_get_net_if_buffer para o pacote de ack */
@@ -291,7 +291,7 @@ static uint32_t ol_send_link_ack(link_layer_header_t *link_frame, uint32_t timeo
 static BaseType_t ol_from_link_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
 
 static void ol_receive_link_frame(uint32_t timeout){
-    if (lora_received(timeout) == pdTRUE) {
+    if (is_lora_frame_received(timeout) == pdTRUE) {
         int len = lora_read_frame_size();
         /* todo: analisar o ol_get_net_if_buffer em ol_receive_link_frame */
         net_if_buffer_descriptor_t *net_if_buffer = ol_get_net_if_buffer((uint8_t)len, MAX_NET_IF_DESCRIPTORS_WAIT_TIME_MS);
@@ -354,6 +354,8 @@ static BaseType_t ol_from_link_layer(net_if_buffer_descriptor_t **buffer, TickTy
     return xQueueReceive(rx_link_layer_queue, buffer, timeout);
 }
 
+static BaseType_t ol_from_transport_layer(net_if_buffer_descriptor_t **buffer, TickType_t timeout);
+
 static void ol_link_layer_task(void *arg) {
     // esperar pacotes das camadas superiores
     // chegou um pacote do radio
@@ -388,7 +390,7 @@ static void ol_link_layer_task(void *arg) {
 
     while(1) {
         /* Enter in reception mode */
-        lora_receive();
+        lora_enter_receive_mode();
         /* Block to wait for something to be available from the queues or
         semaphore that have been added to the set. */
         xActivatedMember = xQueueSelectFromSet( link_event, portMAX_DELAY);
@@ -397,11 +399,13 @@ static void ol_link_layer_task(void *arg) {
             // Transmit a frame
             net_if_buffer_descriptor_t *frame;
             BaseType_t space = uxQueueSpacesAvailable(tx_link_layer_queue);
-            ESP_LOGI(TAG, "Available space in the link layer RX queue: %d", space);
+            ESP_LOGI(TAG, "Available space in the link layer TX queue: %d", space);
             if (space == 0){
                 is_queue_full = true;
             }
-            xQueueReceive( xActivatedMember, &frame, portMAX_DELAY);
+
+            // Receive a packet from the transport layer
+            (void)ol_from_transport_layer(&frame, portMAX_DELAY);
 
             uint8_t len = 0;
             if (ol_send_link_frame(frame->dst_addr, frame, portMAX_DELAY) != pdTRUE) {
@@ -517,11 +521,9 @@ static BaseType_t ol_from_link_to_transport_layer(net_if_buffer_descriptor_t *bu
     return xQueueSendToBack(rx_link_layer_queue, &buffer, timeout);
 }
 
-/*
 static BaseType_t ol_from_transport_layer(net_if_buffer_descriptor_t **buffer, TickType_t timeout) {
-    return xQueueReceive(rx_transp_layer_queue, buffer, timeout);
+    return xQueueReceive(tx_link_layer_queue, buffer, timeout);
 }
-*/
 
 static void ol_transport_layer_task(void *arg) {
     // esperar pacotes das camadas superiores (em geral, aplicação)
