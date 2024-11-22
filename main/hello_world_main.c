@@ -43,7 +43,7 @@
 #define BOARD_V2_16     3
 #define BOARD_TTGO_BEAM 4
 
-#define BOARD   BOARD_V1
+#define BOARD   BOARD_TTGO_BEAM
 
 
 #define PRINT_DEBUG 0
@@ -52,7 +52,7 @@
 
 #define HAVE_LORA   1
 #define HAVE_SDCARD 0
-#define HAVE_OLED   0
+#define HAVE_OLED   1
 
 // Utilizado para debug em campo
 #define HAVE_LED    0
@@ -149,8 +149,8 @@ const char *file;
 void lora_transmit_task(void *param) {
     (void)param;
     static const char *TAG = "lora_tx";
-    uint16_t cnt = 0;
-    char buffer[16];
+    //uint16_t cnt = 0;
+    //char buffer[16];
     transport_layer_t client;
     client.protocol = TRANSP_STREAM;
     client.src_port = OL_TRANSPORT_CLIENT_PORT_INIT+1;
@@ -163,7 +163,7 @@ void lora_transmit_task(void *param) {
     }
     while(1) {
         #if 1
-        uint8_t *pfile = file;
+        const uint8_t *pfile = (const uint8_t *)file;
         int full_len = strlen(file);
         uint16_t len = 0;
         while(*file){
@@ -275,7 +275,7 @@ void lora_receive_task_3(void *param) {
     transport_layer_t server;
     server.protocol = TRANSP_DATAGRAM;
     server.src_port = 3;
-	server.dst_port = OL_TRANSPORT_CLIENT_PORT_INIT+2;
+	server.dst_port = OL_TRANSPORT_CLIENT_PORT_INIT+3;
     int ret = ol_transp_open(&server);
     if (ret == pdFAIL) {
         ESP_LOGI(TAG, "It was not possible to listen the %d port", server.src_port );
@@ -316,7 +316,7 @@ void app_main()
 
    // Tarefas lora
    // Init LoRa with datarate 4, coding rate 5, channel 0, power level 20dBm, with PA Boost, CRC and explicit header
-   if (lora_init(4, 5, CHANNEL_0, 20, true, true, true)) {
+   if (lora_init(4, 5, CHANNEL_0, 17, true, true, true)) {
         // init openlora stack
         #if MODE == RECEIVER
         if (ol_init(1, OL_BORDER_ROUTER_ADDR) == pdTRUE){

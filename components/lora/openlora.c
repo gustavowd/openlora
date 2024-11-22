@@ -247,7 +247,7 @@ uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if
     return pdFALSE;
 }
 
-uint32_t ol_send_link_ack(link_layer_header_t *link_frame, uint32_t timeout) {
+static uint32_t ol_send_link_ack(link_layer_header_t *link_frame, uint32_t timeout) {
     /* todo: analisar o ol_get_net_if_buffer para o ol_send_link_ack */
     net_if_buffer_descriptor_t *net_if_ack_buffer = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t), MAX_NET_IF_DESCRIPTORS_WAIT_TIME_MS);
 
@@ -330,11 +330,10 @@ void ol_receive_link_frame(uint32_t timeout){
 BaseType_t ol_to_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
     return xQueueSendToBack(tx_link_layer_queue, &buffer, timeout);
 }
-/*
-BaseType_t ol_from_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
+
+BaseType_t ol_from_link_layer(net_if_buffer_descriptor_t **buffer, TickType_t timeout) {
     return xQueueReceive(rx_link_layer_queue, buffer, timeout);
 }
-*/
 
 void ol_link_layer_task(void *arg) {
     // esperar pacotes das camadas superiores
@@ -488,7 +487,7 @@ BaseType_t ol_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t 
     return xQueueSendToBack(tx_transp_layer_queue, &buffer, timeout);
 }
 
-BaseType_t ol_from_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
+BaseType_t ol_from_transport_layer(net_if_buffer_descriptor_t **buffer, TickType_t timeout) {
     return xQueueReceive(rx_transp_layer_queue, buffer, timeout);
 }
 
@@ -542,7 +541,7 @@ void ol_transport_layer_task(void *arg) {
         }else if( xActivatedMember == rx_link_layer_queue ){
             // from link layer
             net_if_buffer_descriptor_t *packet = NULL;
-            xQueueReceive( xActivatedMember, &packet, 0);
+            (void)ol_from_link_layer(&packet, 0);
             (void)ol_transp_layer_receive_packet(packet);
         }else if ( xActivatedMember == link_layer_tx_ready_signal ){
             xSemaphoreTake(xActivatedMember, 0);
@@ -596,7 +595,7 @@ int ol_transp_recv(transport_layer_t *server_client, uint8_t *buffer, TickType_t
 }
 
 
-int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint16_t length, TickType_t timeout){
+int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint16_t length, TickType_t timeout){
     // send a transport layer segment/datagram
     // todo: verificar a quantidade de net if buffers antes de tentar enviar
     int ret = 0;

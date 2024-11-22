@@ -43,8 +43,8 @@ typedef struct
 
 typedef enum __attribute__((packed)) {
     DATA_FRAME = 1,
-    //RTS_PACKET,
-    //CTS_PACKET,
+    //RTS_FRAME,
+    //CTS_FRAME,
     ACK_FRAME
 }link_frame_type_t;
 
@@ -106,18 +106,17 @@ typedef struct __attribute__((packed, aligned(1))) {
 }transport_layer_header_t;
 
 BaseType_t ol_init(uint8_t nwk_id, uint8_t addr);
+
 net_if_buffer_descriptor_t *ol_get_net_if_buffer(uint8_t size, uint32_t timeout);
 BaseType_t ol_release_net_if_buffer(net_if_buffer_descriptor_t *buffer);
 BaseType_t ol_get_number_of_free_net_if_buffer(void);
 
 BaseType_t ol_to_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
-/*
-BaseType_t ol_from_link_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
-*/
+BaseType_t ol_from_link_layer(net_if_buffer_descriptor_t **buffer, TickType_t timeout);
 
+BaseType_t ol_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
+BaseType_t ol_from_transport_layer(net_if_buffer_descriptor_t **buffer, TickType_t timeout);
 int ol_transp_open(transport_layer_t *client_server);
 int ol_transp_close(transport_layer_t *server_client);
 int ol_transp_recv(transport_layer_t *server_client, uint8_t *buffer, TickType_t timeout);
-int ol_transp_send(transport_layer_t *server_client, uint8_t *buffer, uint16_t length, TickType_t timeout);
-BaseType_t ol_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
-BaseType_t ol_from_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
+int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint16_t length, TickType_t timeout);
