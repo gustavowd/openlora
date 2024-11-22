@@ -53,6 +53,14 @@ static SemaphoreHandle_t    link_layer_tx_ready_signal;
 static QueueHandle_t        tx_transp_layer_queue;
 static QueueHandle_t        rx_transp_layer_queue;
 
+
+
+/************************************************************************************************************************
+ * 
+ *          Net Buffer Functions
+ * 
+ ************************************************************************************************************************/
+
 static BaseType_t ol_init_net_if_buffers(void){
     for (int i=0; i<NUMBER_OF_NET_IF_DESCRIPTORS; i++) {
         net_if_buffer_descriptors[i].puc_link_buffer = NULL;
@@ -127,6 +135,7 @@ BaseType_t ol_init(uint8_t nwk_id, uint8_t addr) {
         vSemaphoreDelete(ol_network_buffer_mutex);
         return pdFAIL;
     }
+
     if (xTaskCreate(ol_transport_layer_task, "OL Transport Layer Task", 2048, NULL, 3, NULL) != pdPASS) {
         vSemaphoreDelete(ol_available_network_buffer);
         vSemaphoreDelete(ol_network_buffer_mutex);
@@ -143,6 +152,7 @@ BaseType_t ol_init(uint8_t nwk_id, uint8_t addr) {
  ************************************************************************************************************************/
 
 static uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t *net_if_buffer, uint32_t timeout){
+    // Make the net buffer pointer a link layler header pointer
     link_layer_header_t *link_frame = (link_layer_header_t *)net_if_buffer->puc_link_buffer;
 
     link_frame->frame_type = DATA_FRAME;
@@ -152,10 +162,12 @@ static uint32_t ol_send_link_frame(uint8_t dst_addr, net_if_buffer_descriptor_t 
     link_frame->src_addr   = openlora.node_addr;
     link_frame->payload_size = net_if_buffer->data_length - sizeof(link_layer_header_t) - sizeof(link_layer_trailer_t);
 
+    // Find the link trailer position and make that position a link layer trailer pointer
     link_layer_trailer_t *link_trailer = (link_layer_trailer_t *)&net_if_buffer->puc_link_buffer[sizeof(link_layer_header_t)+link_frame->payload_size];
 
     link_trailer->crc = usLORACRC16(net_if_buffer->puc_link_buffer, sizeof(link_layer_header_t) + link_frame->payload_size);
 
+    // link layer frame is ready for transmition
     uint32_t link_retries = 0;
     do {
         /* Variables used for the backoff algorithm */
@@ -276,6 +288,8 @@ static uint32_t ol_send_link_ack(link_layer_header_t *link_frame, uint32_t timeo
     return pdFAIL;
 }
 
+static BaseType_t ol_from_link_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout);
+
 static void ol_receive_link_frame(uint32_t timeout){
     if (lora_received(timeout) == pdTRUE) {
         int len = lora_read_frame_size();
@@ -292,7 +306,7 @@ static void ol_receive_link_frame(uint32_t timeout){
                         if (ol_send_link_ack(link_frame_header, LINK_ACK_TIMEOUT) == pdTRUE) {
                             if (openlora.neigh_seq_number[link_frame_header->src_addr] != link_frame_header->seq_number) {
                                 openlora.neigh_seq_number[link_frame_header->src_addr] = link_frame_header->seq_number;
-                                if (xQueueSendToBack(rx_link_layer_queue, &net_if_buffer, timeout) == pdTRUE) {
+                                if (ol_from_link_to_transport_layer(net_if_buffer, timeout) == pdTRUE) {
                                     ESP_LOGI(OPEN_LORA_TAG, "link frame sent to the upper layer");
                                 }else {
                                     // todo: analyze ol_release_net_if_buffer fail
@@ -495,8 +509,12 @@ static BaseType_t ol_transp_layer_receive_packet(net_if_buffer_descriptor_t *pac
     return pdFAIL;
 }
 
-static BaseType_t ol_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
+static BaseType_t ol_from_app_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
     return xQueueSendToBack(tx_transp_layer_queue, &buffer, timeout);
+}
+
+static BaseType_t ol_from_link_to_transport_layer(net_if_buffer_descriptor_t *buffer, TickType_t timeout) {
+    return xQueueSendToBack(rx_link_layer_queue, &buffer, timeout);
 }
 
 /*
@@ -568,9 +586,13 @@ static void ol_transport_layer_task(void *arg) {
 
 int ol_transp_open(transport_layer_t *client_server){
 	ol_transp_include_client_or_server(client_server);
-    //Create a queue
+    
+    //Create a reception queue
     client_server->transp_wakeup = xQueueCreate(1, sizeof(net_if_buffer_descriptor_t *));
+
+
     if (client_server->protocol == TRANSP_STREAM) {
+        // Ack queue for the streaming protocol
         client_server->transp_ack = xQueueCreate(1, sizeof(uint8_t));
         if ((client_server->transp_wakeup != NULL) && (client_server->transp_ack != NULL)){
             return pdPASS;
@@ -588,7 +610,10 @@ int ol_transp_close(transport_layer_t *server_client){
 	ol_transp_remove_client_or_server(server_client);
 	// Delete the server/client semaphore
     vQueueDelete(server_client->transp_wakeup);
-    vQueueDelete(server_client->transp_ack);
+
+    if (server_client->protocol == TRANSP_STREAM) {
+        vQueueDelete(server_client->transp_ack);
+    }
 	return 0;
 }
 
@@ -623,10 +648,12 @@ int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint
                     net_if_buffer_descriptor_t *datagram  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+sizeof(transport_layer_header_t)+length, timeout);
                     transport_layer_header_t *transp_header = (transport_layer_header_t *)&datagram->puc_link_buffer[sizeof(link_layer_header_t)];
                     uint8_t *payload = (uint8_t *)&datagram->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
+                    // header
                     transp_header->src_port = server_client->src_port;
                     transp_header->dst_port = server_client->dst_port;
                     transp_header->payload_size = length;
                     transp_header->protocol = server_client->protocol;
+                    // net buffer
                     datagram->dst_addr = server_client->dst_addr;
                     memcpy(payload, buffer, length);
                     /*
@@ -635,7 +662,7 @@ int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint
                         ESP_LOGI(OPEN_LORA_TAG, "%d ", datagram->puc_link_buffer[i]);
                     }
                     */
-                    ol_to_transport_layer(datagram, timeout);
+                    ol_from_app_to_transport_layer(datagram, timeout);
                     ret = length;
                     break;
                 }else {
@@ -673,7 +700,7 @@ int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint
                     }
                     */
                     segment->packet_ack = server_client->transp_ack;
-                    ol_to_transport_layer(segment, timeout);
+                    ol_from_app_to_transport_layer(segment, timeout);
 
                     // Wait for confirmation of the delivered package or error
                     uint8_t len = 0;
