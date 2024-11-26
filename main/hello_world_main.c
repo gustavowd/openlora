@@ -33,6 +33,8 @@
 #include "driver/uart.h"
 #include "string.h"
 
+#include "zlib.h"
+
 #define TRANSMITTER 1
 #define RECEIVER    2
 #define MODE RECEIVER
@@ -294,6 +296,130 @@ void lora_receive_task_3(void *param) {
 }
 #endif
 
+
+#define CHUNK 192
+
+const char *test_file = "Internet Engineering Task Force (IETF)\n"
+"Request for Comments: 8180               Universitat Oberta de Catalunya\n"
+"BCP: 210                                                       K. Pister\n"
+"Category: Best Current Practice        University of California Berkeley\n"
+"ISSN: 2070-1721                                              T. Watteyne\n"
+"                                                          Analog Devices\n"
+"                                                                May 2017\n"
+"                                                                \n"
+"Minimal IPv6 over the TSCH Mode of IEEE 802.15.4e (6TiSCH) Configuration\n"
+"\n"
+"Abstract\n";
+
+uint32_t compressBuffer(const char *file, char *dest, uint32_t size) {
+    int ret, flush;
+    unsigned have;
+    z_stream strm;
+    //unsigned char in[CHUNK];
+    uint8_t *source = (uint8_t *)file;
+    unsigned char out[CHUNK];
+
+    // Initialize the zlib stream for compression
+    strm.zalloc = Z_NULL;
+    strm.zfree = Z_NULL;
+    strm.opaque = Z_NULL;
+    ret = deflateInit(&strm, Z_BEST_COMPRESSION);
+    if (ret != Z_OK) return 0;
+
+    // Compress until end of file
+    uint16_t len = 0;
+    uint32_t total_len = 0;
+    do {
+        if (size >= CHUNK){
+            len = CHUNK;
+            flush = Z_NO_FLUSH;
+        }else {
+            flush = Z_FINISH;
+            len = size;
+        }
+        strm.avail_in = len;
+        strm.next_in = source;
+
+        // Run deflate() on input until output buffer not full
+        do {
+            strm.avail_out = CHUNK;
+            strm.next_out = out;
+            ret = deflate(&strm, flush);
+            assert(ret != Z_STREAM_ERROR);
+            have = CHUNK - strm.avail_out;
+            memcpy(dest, out, have);
+            dest += have;
+            total_len += have;
+            //ESP_LOGI(TAG,"Chunk size: %d\n\r", have);
+        } while (strm.avail_out == 0);
+
+        source += len;
+        size -= len;
+    }while (flush != Z_FINISH);
+
+    // Clean up
+    (void)deflateEnd(&strm);
+    return total_len;
+}
+
+uint32_t decompressBuffer(char *uncompres, char *compres, int size) {
+    int ret;
+    unsigned have;
+    z_stream strm;
+    unsigned char out[CHUNK];
+
+    // Initialize the zlib stream for decompression
+    strm.zalloc = Z_NULL;
+    strm.zfree = Z_NULL;
+    strm.opaque = Z_NULL;
+    ret = inflateInit(&strm);
+    if (ret != Z_OK) return 0;
+
+    // Decompress until deflate stream ends or end of file
+    uint16_t len = 0;
+    uint32_t total_len = 0;
+    do {
+        if (size >= CHUNK){
+            len = CHUNK;
+        }else {
+            len = size;
+        }
+
+        strm.avail_in = CHUNK;
+        strm.next_in = (Bytef *)compres;
+
+        // Run inflate() on input until output buffer not full
+        do {
+            strm.avail_out = CHUNK;
+            strm.next_out = out;
+            ret = inflate(&strm, Z_NO_FLUSH);
+            assert(ret != Z_STREAM_ERROR);
+            switch (ret) {
+                case Z_NEED_DICT:
+                case Z_DATA_ERROR:
+                case Z_MEM_ERROR:
+                    (void)inflateEnd(&strm);
+                    return 0;
+            }
+            have = CHUNK - strm.avail_out;
+            total_len += have;
+            memcpy(uncompres, out, have);
+            uncompres += have;
+        } while (strm.avail_out == 0);
+        compres += len;
+        size -= len;
+
+        // Done when inflate() says it's done
+    } while (ret != Z_STREAM_END);
+
+    // Clean up
+    (void)inflateEnd(&strm);
+
+    return total_len;
+}
+
+char comp[512];
+char uncomp[640];
 void app_main()
 {
     printf("Hello world!\n");
@@ -313,6 +439,13 @@ void app_main()
 
     printf("%ldMB %s flash\n", size_flash_chip / (1024 * 1024),
             (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
+
+    uint32_t len = compressBuffer(test_file, comp, strlen(test_file));
+    ESP_LOGI(TAG, "Compress size %ld\n\r", len);
+
+    len = decompressBuffer(uncomp, comp, len);
+    ESP_LOGI(TAG, "Uncompress size %ld\n\r", len);
+    ESP_LOGI(TAG, "%s\n\r", uncomp);
 
    // Tarefas lora
    // Init LoRa with datarate 4, coding rate 5, channel 0, power level 20dBm, with PA Boost, CRC and explicit header
