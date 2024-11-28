@@ -43,7 +43,7 @@ static net_if_buffer_descriptor_t net_if_buffer_descriptors[NUMBER_OF_NET_IF_DES
 static openlora_t openlora;
 static transport_layer_t *transp_list_head=NULL;
 static transport_layer_t *transp_list_tail=NULL;
-static const char *OPEN_LORA_TAG = "lora_tx";
+static const char *OPEN_LORA_TAG = "OpenLoRa";
 
 /* Define the size of the item to be held by queue 1 and queue 2 respectively.
 The values used here are just for demonstration purposes. */
@@ -325,7 +325,7 @@ static void ol_receive_link_frame(uint32_t timeout){
                             if (openlora.neigh_seq_number[link_frame_header->src_addr] != link_frame_header->seq_number) {
                                 openlora.neigh_seq_number[link_frame_header->src_addr] = link_frame_header->seq_number;
                                 if (ol_from_link_to_transport_layer(net_if_buffer, timeout) == pdTRUE) {
-                                    ESP_LOGI(OPEN_LORA_TAG, "link frame sent to the upper layer");
+                                    //ESP_LOGI(OPEN_LORA_TAG, "link frame sent to the upper layer");
                                 }else {
                                     // todo: analyze ol_release_net_if_buffer fail
                                     (void)ol_release_net_if_buffer(net_if_buffer);
@@ -516,7 +516,7 @@ static BaseType_t ol_transp_layer_receive_packet(net_if_buffer_descriptor_t *pac
                 server_client->payload_size = transp_packet_header->payload_size;
                 server_client->sender_port = transp_packet_header->src_port;
                 //server_client->sender_addr = link_frame_header->src_addr;
-                ESP_LOGI(OPEN_LORA_TAG, "Wake up destination task!");
+                //ESP_LOGI(OPEN_LORA_TAG, "Wake up destination task!");
                 xQueueSendToBack(server_client->transp_wakeup, &packet, 0);
                 return pdPASS;
             }
@@ -640,17 +640,34 @@ int ol_transp_close(transport_layer_t *server_client){
 int ol_transp_recv(transport_layer_t *server_client, uint8_t *buffer, TickType_t timeout){
     // Wait for the semaphore
     net_if_buffer_descriptor_t *datagram_or_segment = NULL;
-    if (xQueueReceive(server_client->transp_wakeup, &datagram_or_segment, timeout) == pdTRUE){
-        // something was receive
-        /*todo: receiving a datagram. How to receive a segment? Different transport header? */
-        transport_layer_header_t *transp_header = (transport_layer_header_t *)&datagram_or_segment->puc_link_buffer[sizeof(link_layer_header_t)];
-        uint8_t *payload = &datagram_or_segment->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
-        memcpy(buffer, payload,transp_header->payload_size);
-        int len = transp_header->payload_size;
-        ol_release_net_if_buffer(datagram_or_segment);
-        return len;
+    int len = 0;
+    while(1) {
+        if (xQueueReceive(server_client->transp_wakeup, &datagram_or_segment, timeout) == pdTRUE){
+            // something was receive
+            /*todo: receiving a datagram. How to receive a segment? Different transport header? */
+            transport_layer_header_t *transp_header = (transport_layer_header_t *)&datagram_or_segment->puc_link_buffer[sizeof(link_layer_header_t)];
+            uint8_t *payload = &datagram_or_segment->puc_link_buffer[sizeof(link_layer_header_t)+sizeof(transport_layer_header_t)];
+            memcpy(buffer, payload,transp_header->payload_size);
+            if (transp_header->seq == 0){
+                // Datagram
+                len = transp_header->payload_size;
+                ol_release_net_if_buffer(datagram_or_segment);
+                return len;
+            }else {
+                // Stream
+                len += transp_header->payload_size;
+                buffer += transp_header->payload_size;
+                uint8_t seq = transp_header->seq;
+                ESP_LOGI(OPEN_LORA_TAG, "Receiving length: %d, seq: %d", len, seq);
+                ol_release_net_if_buffer(datagram_or_segment);
+                if ((seq & LAST_SEQ) == LAST_SEQ){
+                    return len;
+                }
+            }
+        }else {
+            return pdFAIL;
+        }
     }
-	return pdFAIL;
 }
 
 
@@ -663,7 +680,7 @@ int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint
         if (length <= OL_TRANSPORT_MAX_PAYLOAD_SIZE){
             int retries = 3;
             do {
-                BaseType_t free_net_buffers = ol_get_number_of_free_net_if_buffer();    
+                BaseType_t free_net_buffers = ol_get_number_of_free_net_if_buffer();
                 if (free_net_buffers >= MIN_NUMBER_OF_NET_IF_DESCRIPTORS) {
                     net_if_buffer_descriptor_t *datagram  = ol_get_net_if_buffer(sizeof(link_layer_header_t)+sizeof(link_layer_trailer_t)+sizeof(transport_layer_header_t)+length, timeout);
                     transport_layer_header_t *transp_header = (transport_layer_header_t *)&datagram->puc_link_buffer[sizeof(link_layer_header_t)];
@@ -673,6 +690,7 @@ int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint
                     transp_header->dst_port = server_client->dst_port;
                     transp_header->payload_size = length;
                     transp_header->protocol = server_client->protocol;
+                    transp_header->seq = 0;
                     // net buffer
                     datagram->dst_addr = server_client->dst_addr;
                     memcpy(payload, buffer, length);
@@ -692,6 +710,8 @@ int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint
             }while(retries > 0);
         }
     }else if (server_client->protocol == TRANSP_STREAM){
+        // The second bit is used to identify a streaming transfer
+        uint8_t  seq = FIRST_SEQ;
         uint16_t bytes_left = length;
         while(bytes_left > 0){
             uint16_t bytes_count;
@@ -699,6 +719,7 @@ int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint
                 bytes_count = OL_TRANSPORT_MAX_PAYLOAD_SIZE;
             }else {
                 bytes_count = bytes_left;
+                seq |= LAST_SEQ;
             }
             int retries = 3;
             do {
@@ -711,6 +732,7 @@ int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint
                     transp_header->dst_port = server_client->dst_port;
                     transp_header->payload_size = bytes_count;
                     transp_header->protocol = server_client->protocol;
+                    transp_header->seq = seq;
                     segment->dst_addr = server_client->dst_addr;
                     memcpy(payload, buffer, bytes_count);
                     /*
@@ -732,6 +754,8 @@ int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint
                         bytes_left -= bytes_count;
                         // increments the payload buffer pointer
                         buffer += bytes_count;
+                        // increments the seq number
+                        seq++;
                     }
                     break;
                 }else {
@@ -743,3 +767,5 @@ int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint
     }
     return ret;
 }
+
+

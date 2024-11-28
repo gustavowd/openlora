@@ -37,6 +37,7 @@
 
 #define OL_TRANSPORT_CLIENT_PORT_INIT         0x80
 #define OL_TRANSPORT_MAX_PAYLOAD_SIZE         216 // excludes the protocol headers and trailers
+//#define OL_APP_MAX_PAYLOAD_SIZE               216-sizeof(transport_layer_header_t) // excludes the protocol headers and trailers
 
 typedef struct openlora_t_ {
     uint8_t  nwk_id;
@@ -116,12 +117,37 @@ typedef enum __attribute__((packed)) {
     TRANSP_STREAM
 }transp_protocol_type_t;
 
+#define FIRST_SEQ   0x80
+#define LAST_SEQ    0x40
+
 typedef struct __attribute__((packed, aligned(1))) {
     uint8_t                 dst_port;
     uint8_t                 src_port;
     transp_protocol_type_t  protocol;
+    uint8_t                 seq;
     uint8_t                 payload_size;
 }transport_layer_header_t;
+
+#define FTP_PORT             21
+#define FTP_BUFFER_SIZE      1024
+
+typedef enum __attribute__((packed)) {
+    FILE_START_PACKET = 1,
+    FILE_DATA_PACKET,
+    FILE_END_PACKET
+}file_data_packet_type_t;
+
+typedef struct __attribute__((packed, aligned(1))) {
+    file_data_packet_type_t app_packet_type;
+    uint16_t                seq_number;
+    uint16_t                payload_size;
+}app_file_data_layer_header_t;
+
+#define FTP_MAX_PAYLOAD_SIZE FTP_BUFFER_SIZE-sizeof(app_file_data_layer_header_t)
+
+typedef struct {
+    transport_layer_t   transp_handler;
+}file_server_client_t;
 
 // Init openLoRa network
 BaseType_t ol_init(uint8_t nwk_id, uint8_t addr);
@@ -131,3 +157,8 @@ int ol_transp_open(transport_layer_t *client_server);
 int ol_transp_close(transport_layer_t *server_client);
 int ol_transp_recv(transport_layer_t *server_client, uint8_t *buffer, TickType_t timeout);
 int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint16_t length, TickType_t timeout);
+
+file_server_client_t *ol_create_file_client(void);
+file_server_client_t *ol_create_file_server(void);
+uint32_t ol_send_file_buffer(file_server_client_t *server_client, uint8_t dst_addr, char *filename, uint8_t *file, uint32_t file_size, uint32_t segment_timeout);
+uint32_t ol_receive_file_buffer(file_server_client_t *server_client, char *filename, uint8_t *file, uint32_t *file_size, uint32_t segment_timeout);
