@@ -90,6 +90,10 @@
     #define LED_2                                       4
 #endif
 
+#define SDCARD_SPI  1
+#define SDCARD_MMC  2
+#define SDCARD_IF   SDCARD_MMC
+
 /* SD Card and record WAV files definitions */
 #define SPI_DMA_CHAN        SPI_DMA_CH_AUTO
 #define NUM_CHANNELS        (1) // For mono recording only!
@@ -102,8 +106,9 @@ static const char *SDCARD_TAG = "SDCARD";
 
 
 i2s_chan_handle_t rx_handle = NULL;
-
+#if (SDCARD_IF == SDCARD_SPI)
 sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+#endif
 sdmmc_card_t *card;
 static int16_t i2s_readraw_buff[SAMPLE_SIZE/2];
 size_t bytes_read;
@@ -171,7 +176,7 @@ void mount_sdcard(void)
     };
     ESP_LOGI(SDCARD_TAG, "Initializing SD card");
 
-/*
+    #if (SDCARD_IF == SDCARD_SPI)
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = CONFIG_EXAMPLE_SPI_MOSI_GPIO,
         .miso_io_num = CONFIG_EXAMPLE_SPI_MISO_GPIO,
@@ -191,8 +196,11 @@ void mount_sdcard(void)
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = CONFIG_EXAMPLE_SPI_CS_GPIO;
     slot_config.host_id = host.slot;
-    */
 
+    ret = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot_config, &mount_config, &card);
+    #endif
+
+    #if (SDCARD_IF == SDCARD_MMC)
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
 
@@ -212,8 +220,8 @@ void mount_sdcard(void)
     //gpio_set_pull_mode(12, GPIO_PULLUP_ONLY);   // D2, needed in 4-line mode only
     gpio_set_pull_mode(CONFIG_SPI_CS_GPIO, GPIO_PULLUP_ONLY);   // D3, needed in 4- and 1-line modes
 
-    //ret = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot_config2, &mount_config, &card);
     ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot_config, &mount_config, &card);
+    #endif
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
@@ -281,7 +289,9 @@ void record_wav(uint32_t rec_time)
     esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, card);
     ESP_LOGI(SDCARD_TAG, "Card unmounted");
     // Deinitialize the bus after all devices are removed
+    #if (SDCARD_IF == SDCARD_SPI)
     spi_bus_free(host.slot);
+    #endif
 }
 
 /*
