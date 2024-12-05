@@ -19,6 +19,8 @@
 
 #include <driver/gpio.h>
 #include <driver/spi_master.h>
+#include "driver/i2s_pdm.h"
+#include "driver/i2s_std.h"
 #include <esp_log.h>
 #include "u8g2_esp32_hal.h"
 #include <u8g2.h>
@@ -34,6 +36,7 @@
 #include "string.h"
 
 #include "zlib.h"
+#include "FLAC/stream_encoder.h"
 
 #define TRANSMITTER 1
 #define RECEIVER    2
@@ -54,7 +57,7 @@
 
 #define HAVE_LORA   1
 #define HAVE_SDCARD 0
-#define HAVE_OLED   1
+#define HAVE_OLED   0
 
 // Utilizado para debug em campo
 #define HAVE_LED    0
@@ -86,6 +89,408 @@
     #define LED_1                                       22
     #define LED_2                                       4
 #endif
+
+/* SD Card and record WAV files definitions */
+#define SPI_DMA_CHAN        SPI_DMA_CH_AUTO
+#define NUM_CHANNELS        (1) // For mono recording only!
+#define SD_MOUNT_POINT      "/sdcard"
+#define SAMPLE_SIZE         (8*4096)
+#define BYTE_RATE           (CONFIG_EXAMPLE_SAMPLE_RATE * (CONFIG_EXAMPLE_BIT_SAMPLE / 8)) * NUM_CHANNELS
+// Define the size of blocks to be read when flac encoding
+#define READSIZE			128
+static const char *SDCARD_TAG = "SDCARD";
+
+
+i2s_chan_handle_t rx_handle = NULL;
+
+sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+sdmmc_card_t *card;
+static int16_t i2s_readraw_buff[SAMPLE_SIZE/2];
+size_t bytes_read;
+const int WAVE_HEADER_SIZE = 44;
+
+typedef struct {
+    struct {
+        char chunk_id[4]; /*!< Contains the letters "RIFF" in ASCII form */
+        uint32_t chunk_size; /*!< This is the size of the rest of the chunk following this number */
+        char chunk_format[4]; /*!< Contains the letters "WAVE" */
+    } descriptor_chunk; /*!< Canonical WAVE format starts with the RIFF header */
+    struct {
+        char subchunk_id[4]; /*!< Contains the letters "fmt " */
+        uint32_t subchunk_size; /*!< This is the size of the rest of the Subchunk which follows this number */
+        uint16_t audio_format; /*!< PCM = 1, values other than 1 indicate some form of compression */
+        uint16_t num_of_channels; /*!< Mono = 1, Stereo = 2, etc. */
+        uint32_t sample_rate; /*!< 8000, 44100, etc. */
+        uint32_t byte_rate; /*!< ==SampleRate * NumChannels * BitsPerSample s/ 8 */
+        uint16_t block_align; /*!< ==NumChannels * BitsPerSample / 8 */
+        uint16_t bits_per_sample; /*!< 8 bits = 8, 16 bits = 16, etc. */
+    } fmt_chunk; /*!< The "fmt " subchunk describes the sound data's format */
+    struct {
+        char subchunk_id[4]; /*!< Contains the letters "data" */
+        uint32_t subchunk_size; /*!< ==NumSamples * NumChannels * BitsPerSample / 8 */
+        int16_t data[0]; /*!< Holds raw audio data */
+    } data_chunk; /*!< The "data" subchunk contains the size of the data and the actual sound */
+} wav_header_t;
+
+/**
+ * @brief Default header for PCM format WAV files
+ *
+ */
+#define WAV_HEADER_PCM_DEFAULT(wav_sample_size, wav_sample_bits, wav_sample_rate, wav_channel_num) { \
+    .descriptor_chunk = { \
+        .chunk_id = {'R', 'I', 'F', 'F'}, \
+        .chunk_size = (wav_sample_size) + sizeof(wav_header_t) - 8, \
+        .chunk_format = {'W', 'A', 'V', 'E'} \
+    }, \
+    .fmt_chunk = { \
+        .subchunk_id = {'f', 'm', 't', ' '}, \
+        .subchunk_size = 16, /* 16 for PCM */ \
+        .audio_format = 1, /* 1 for PCM */ \
+        .num_of_channels = (wav_channel_num), \
+        .sample_rate = (wav_sample_rate), \
+        .byte_rate = (wav_sample_bits) * (wav_sample_rate) * (wav_channel_num) / 8, \
+        .block_align = (wav_sample_bits) * (wav_channel_num) / 8, \
+        .bits_per_sample = (wav_sample_bits)\
+    }, \
+    .data_chunk = { \
+        .subchunk_id = {'d', 'a', 't', 'a'}, \
+        .subchunk_size = (wav_sample_size) \
+    } \
+}
+
+void mount_sdcard(void)
+{
+    esp_err_t ret;
+    // Options for mounting the filesystem.
+    // If format_if_mount_failed is set to true, SD card will be partitioned and
+    // formatted in case when mounting fails.
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = true,
+        .max_files = 5,
+        .allocation_unit_size = 512
+    };
+    ESP_LOGI(SDCARD_TAG, "Initializing SD card");
+
+/*
+    spi_bus_config_t bus_cfg = {
+        .mosi_io_num = CONFIG_EXAMPLE_SPI_MOSI_GPIO,
+        .miso_io_num = CONFIG_EXAMPLE_SPI_MISO_GPIO,
+        .sclk_io_num = CONFIG_EXAMPLE_SPI_SCLK_GPIO,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 4092,
+    };
+    ret = spi_bus_initialize(host.slot, &bus_cfg, SPI_DMA_CHAN);
+    if (ret != ESP_OK) {
+        ESP_LOGE(SDCARD_TAG, "Failed to initialize bus.");
+        return;
+    }
+
+    // This initializes the slot without card detect (CD) and write protect (WP) signals.
+    // Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
+    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot_config.gpio_cs = CONFIG_EXAMPLE_SPI_CS_GPIO;
+    slot_config.host_id = host.slot;
+    */
+
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
+
+    // This initializes the slot without card detect (CD) and write protect (WP) signals.
+    // Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
+    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+
+    // To use 1-line SD mode, uncomment the following line:
+    slot_config.width = 1;
+
+    // GPIOs 2, 12, 13, 14, 15 should have external 10k pull-ups.
+    // Internal pull-ups are not sufficient. However, enabling internal pull-ups
+    // does make a difference some boards, so we do that here.
+    gpio_set_pull_mode(CONFIG_SPI_MOSI_GPIO, GPIO_PULLUP_ONLY);   // CMD, needed in 4- and 1- line modes
+    gpio_set_pull_mode(CONFIG_SPI_MISO_GPIO, GPIO_PULLUP_ONLY);    // D0, needed in 4- and 1-line modes
+    //gpio_set_pull_mode(14, GPIO_PULLUP_ONLY);    // D1, needed in 4-line mode only
+    //gpio_set_pull_mode(12, GPIO_PULLUP_ONLY);   // D2, needed in 4-line mode only
+    gpio_set_pull_mode(CONFIG_SPI_CS_GPIO, GPIO_PULLUP_ONLY);   // D3, needed in 4- and 1-line modes
+
+    //ret = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot_config2, &mount_config, &card);
+    ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot_config, &mount_config, &card);
+
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE(SDCARD_TAG, "Failed to mount filesystem.");
+        } else {
+            ESP_LOGE(SDCARD_TAG, "Failed to initialize the card (%s). "
+                     "Make sure SD card lines have pull-up resistors in place.", esp_err_to_name(ret));
+        }
+        return;
+    }
+
+    // Card has been initialized, print its properties
+    sdmmc_card_print_info(stdout, card);
+}
+
+void record_wav(uint32_t rec_time)
+{
+    // Use POSIX and C standard library functions to work with files.
+    int flash_wr_size = 0;
+    ESP_LOGI(SDCARD_TAG, "Opening file");
+
+    uint32_t flash_rec_time = BYTE_RATE * rec_time;
+    const wav_header_t wav_header =
+        WAV_HEADER_PCM_DEFAULT(flash_rec_time, 16, CONFIG_EXAMPLE_SAMPLE_RATE, 1);
+
+    // First check if file exists before creating a new file.
+    struct stat st;
+    if (stat(SD_MOUNT_POINT"/record.wav", &st) == 0) {
+        // Delete it if it exists
+        unlink(SD_MOUNT_POINT"/record.wav");
+    }
+
+    // Create new WAV file
+    FILE *f = fopen(SD_MOUNT_POINT"/record.wav", "a");
+    if (f == NULL) {
+        ESP_LOGE(SDCARD_TAG, "Failed to open file for writing");
+        return;
+    }
+
+    // Write the header to the WAV file
+    fwrite(&wav_header, sizeof(wav_header), 1, f);
+
+    // Start recording
+    while (flash_wr_size < flash_rec_time) {
+        // Read the RAW samples from the microphone
+        //TickType_t start = xTaskGetTickCount();
+        if (i2s_channel_read(rx_handle, (char *)i2s_readraw_buff, SAMPLE_SIZE, &bytes_read, 1000) == ESP_OK) {
+            //TickType_t stop = xTaskGetTickCount();
+            //ESP_LOGI(SDCARD_TAG, "i2s time %ld - read: %ld", (uint32_t)stop-start, (uint32_t)bytes_read);
+            //TickType_t start = xTaskGetTickCount();
+            fwrite(i2s_readraw_buff, bytes_read, 1, f);
+            //TickType_t stop = xTaskGetTickCount();
+            //ESP_LOGI(SDCARD_TAG, "SD time %ld", (uint32_t)stop-start);
+            flash_wr_size += bytes_read;
+        } else {
+            printf("Read Failed!\n");
+        }
+    }
+
+    ESP_LOGI(SDCARD_TAG, "Recording done!");
+    fclose(f);
+    ESP_LOGI(SDCARD_TAG, "File written on SDCard");
+
+    // All done, unmount partition and disable SPI peripheral
+    esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, card);
+    ESP_LOGI(SDCARD_TAG, "Card unmounted");
+    // Deinitialize the bus after all devices are removed
+    spi_bus_free(host.slot);
+}
+
+/*
+int32_t max_volume(const audio_sample_t* begin, const audio_sample_t* end) {
+  const audio_sample_t* low = std::min_element(begin, end);
+  const audio_sample_t* high = std::max_element(begin, end);
+  return int32_t(*high) - *low;
+}
+*/
+
+void init_microphone(void)
+{
+    /* Setp 1: Determine the I2S channel configuration and allocate both channels
+     * The default configuration can be generated by the helper macro,
+     * it only requires the I2S controller id and I2S role */
+    i2s_chan_config_t i2s_chan_cfg_rx = {
+        .id = I2S_NUM_AUTO,
+        .role = I2S_ROLE_MASTER,
+        .dma_desc_num = 512,
+        .dma_frame_num = 32,
+        .auto_clear = false,
+    };
+
+    ESP_ERROR_CHECK(i2s_new_channel(&i2s_chan_cfg_rx, NULL, &rx_handle));
+
+    i2s_std_config_t rx_std_cfg = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(CONFIG_EXAMPLE_SAMPLE_RATE/2),
+        .slot_cfg = {
+            .data_bit_width = I2S_DATA_BIT_WIDTH_16BIT,
+            .slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT,
+            .slot_mode = I2S_SLOT_MODE_MONO,
+            .slot_mask = I2S_STD_SLOT_LEFT,
+            .ws_width = 32,
+            .ws_pol = false,
+            .bit_shift = true,
+            .msb_right = true
+            //.left_align = true,
+            //.big_endian = false,
+            //.bit_order_lsb = false,
+        },
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = CONFIG_PIN_I2S_CLK,
+            .ws = CONFIG_PIN_I2S_WS,
+            .dout = I2S_GPIO_UNUSED,
+            .din = CONFIG_PIN_I2S_SD,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv = false,
+            },
+        },
+    };
+
+    /* Initialize the channels */
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle, &rx_std_cfg));
+    ESP_ERROR_CHECK(i2s_channel_enable(rx_handle));
+}
+
+struct file_io
+{
+	FILE *input;
+	FILE *output;
+};
+
+
+static FLAC__StreamEncoderWriteStatus encoder_write_callback_(const FLAC__StreamEncoder *encoder, const FLAC__byte buffer[], size_t bytes, uint32_t samples, uint32_t current_frame, void *client_data)
+{
+	//encoder_client_struct *ecd = (encoder_client_struct*)client_data;
+
+	(void)encoder, (void)samples, (void)current_frame;
+
+	memcpy(client_data, buffer, bytes);
+    //if(local__fwrite(buffer, 1, bytes, ecd->file) != bytes)
+	//	return FLAC__STREAM_ENCODER_WRITE_STATUS_FATAL_ERROR;
+	//else
+	return FLAC__STREAM_ENCODER_WRITE_STATUS_OK;
+}
+
+static void encoder_metadata_callback_(const FLAC__StreamEncoder *encoder, const FLAC__StreamMetadata *metadata, void *client_data)
+{
+	(void)encoder, (void)metadata, (void)client_data;
+}
+
+int flac_encode(void *p)
+{
+	const char *TAG = "flac_encode()";
+
+	// Needed variables
+	struct file_io * np = (struct file_io *)p;
+	FILE * fin = np->input;
+	FILE * fout = np->output;
+
+	unsigned total_samples = 0; /* can use a 32-bit number due to WAVE size limitations */
+	FLAC__byte buffer[READSIZE/*samples*/ * 2/*bytes_per_sample*/ * 1/*channels*/]; /* we read the WAVE data into here */
+	FLAC__int32 pcm[READSIZE/*samples*/ * 1/*channels*/];
+    FLAC__byte output_buffer[READSIZE*4];
+
+
+	FLAC__bool ok = true;
+	FLAC__StreamEncoder *encoder = 0;
+	FLAC__StreamEncoderInitStatus init_status;
+
+	unsigned sample_rate = 0;
+	unsigned channels = 1;
+	unsigned bps = 16;
+
+	// Check for input file
+	if(fin == NULL)
+	{
+		ESP_LOGE(TAG, "ERROR: input file is NULL");
+		return -1;// FILE_NULL;
+	}
+
+	// Check for output file
+	if(fout == NULL)
+	{
+		ESP_LOGE(TAG, "ERROR: output file is NULL");
+		return -1;// FILE_NULL;
+	}
+
+	/* read wav header and validate it */
+	if(
+		fread(buffer, 1, 44, fin) != 44 ||
+		memcmp(buffer, "RIFF", 4) ||
+		memcmp(buffer+8, "WAVEfmt \020\000\000\000\001\000\002\000", 16) ||
+		memcmp(buffer+32, "\004\000\020\000data", 8)
+	){
+		ESP_LOGE(SDCARD_TAG, "ERROR: invalid/unsupported WAVE file, only 16bps stereo WAVE in canonical form allowed");
+		return -1;// INVALID_WAV;
+	}
+	sample_rate = ((((((unsigned)buffer[27] << 8) | buffer[26]) << 8) | buffer[25]) << 8) | buffer[24];
+	total_samples = (((((((unsigned)buffer[43] << 8) | buffer[42]) << 8) | buffer[41]) << 8) | buffer[40]) / 4;
+
+	/* allocate the encoder */
+	if((encoder = FLAC__stream_encoder_new()) == NULL) {
+		ESP_LOGE(TAG, "ERROR: allocating encoder");
+		return -1;// ERROR_ENCODER;
+	}
+
+	ok &= FLAC__stream_encoder_set_verify(encoder, true);
+	ok &= FLAC__stream_encoder_set_compression_level(encoder, 0);
+	ok &= FLAC__stream_encoder_set_channels(encoder, channels);
+	ok &= FLAC__stream_encoder_set_bits_per_sample(encoder, bps);
+	ok &= FLAC__stream_encoder_set_sample_rate(encoder, sample_rate);
+	ok &= FLAC__stream_encoder_set_total_samples_estimate(encoder, total_samples);
+
+	/* initialize encoder */
+	if(ok) {
+		// FLAC__stream_encoder_init_file is different from FLAC__stream_encoder_init_FILE
+		// Check https://www.xiph.org/flac/api/group__flac__stream__encoder.html
+
+		//init_status = FLAC__stream_encoder_init_FILE(encoder, fout, NULL, /*client_data=*/NULL);
+        init_status = FLAC__stream_encoder_init_stream(encoder, encoder_write_callback_, /*seek_callback=*/NULL, /*tell_callback=*/NULL, encoder_metadata_callback_, output_buffer);
+		if(init_status != FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
+            ESP_LOGE(
+                TAG,
+                "ERROR: initializing encoder: %s (%s)",
+                FLAC__StreamEncoderInitStatusString[init_status],
+                FLAC__StreamEncoderStateString[FLAC__stream_encoder_get_state(encoder)]
+            );
+			return -1;
+			ok = false;
+		}
+	}else {
+        return -1;
+    }
+
+	/* read blocks of samples from WAVE file and feed to encoder */
+	if(ok) {
+		size_t left = (size_t)total_samples;
+		while(ok && left) {
+			size_t need = (left>READSIZE? (size_t)READSIZE : (size_t)left);
+			if(fread(buffer, channels*(bps/8), need, fin) != need) {
+				ESP_LOGE(
+					TAG,
+					"ERROR: reading from WAVE file\n"
+				);
+				ok = false;
+                return -1;
+			}
+			else {
+				/* convert the packed little-endian 16-bit PCM samples from WAVE into an interleaved FLAC__int32 buffer for libFLAC */
+				size_t i;
+				for(i = 0; i < need*channels; i++) {
+					/* inefficient but simple and works on big- or little-endian machines */
+					pcm[i] = (FLAC__int32)(((FLAC__int16)(FLAC__int8)buffer[2*i+1] << 8) | (FLAC__int16)buffer[2*i]);
+				}
+				/* feed samples to encoder */
+				ok = FLAC__stream_encoder_process_interleaved(encoder, pcm, need);
+			}
+			left -= need;
+		}
+	}
+
+	ok &= FLAC__stream_encoder_finish(encoder);
+
+	// Check for finished encoder and ok status
+    ESP_LOGI(TAG, "encoding %s", ok? "succeeded" : "failed");
+    ESP_LOGI(
+        TAG,
+        "state: %s",
+        FLAC__StreamEncoderStateString[FLAC__stream_encoder_get_state(encoder)]
+    );
+
+	FLAC__stream_encoder_delete(encoder);
+
+    return 0;
+}
 
 static const char *TAG = "ssd1306";
 volatile char global_counter[6] = {'T', 'e', 's', 't', 'e', '\0'};
@@ -146,11 +551,43 @@ void task_test_SSD1306i2c(void *ignore) {
 
 }
 
+const char *test_file = "Internet Engineering Task Force (IETF)\n"
+"Request for Comments: 8180               Universitat Oberta de Catalunya\n"
+"BCP: 210                                                       K. Pister\n"
+"Category: Best Current Practice        University of California Berkeley\n"
+"ISSN: 2070-1721                                              T. Watteyne\n"
+"                                                          Analog Devices\n"
+"                                                                May 2017\n"
+"                                                                \n"
+"Minimal IPv6 over the TSCH Mode of IEEE 802.15.4e (6TiSCH) Configuration\n"
+"\n"
+"Abstract\n"
+"Internet Engineering Task Force (IETF)\n"
+"Request for Comments: 8180               Universitat Oberta de Catalunya\n"
+"BCP: 210                                                       K. Pister\n"
+"Category: Best Current Practice        University of California Berkeley\n"
+"ISSN: 2070-1721                                              T. Watteyne\n"
+"                                                          Analog Devices\n"
+"                                                                May 2017\n"
+"                                                                \n"
+"Minimal IPv6 over the TSCH Mode of IEEE 802.15.4e (6TiSCH) Configuration\n"
+"\n"
+"Abstract\n";
+
 #if MODE == TRANSMITTER
 const char *file;
 void lora_transmit_task(void *param) {
     (void)param;
     static const char *TAG = "lora_tx";
+    file_server_client_t *client = ol_create_file_client();
+
+    while(1){
+        ol_send_file_buffer(client, OL_BORDER_ROUTER_ADDR, "teste.txt", (uint8_t *)test_file, strlen(test_file), portMAX_DELAY);
+        ESP_LOGI(TAG, "Transmitted file: teste.txt of size: 625");
+        vTaskDelay(5000);
+    }
+
+    #if 0
     //uint16_t cnt = 0;
     //char buffer[16];
     transport_layer_t client;
@@ -208,6 +645,7 @@ void lora_transmit_task(void *param) {
 
         vTaskDelay(1000);
     }
+    #endif
 }
 #endif
 
@@ -215,6 +653,24 @@ void lora_transmit_task(void *param) {
 void lora_receive_task(void *param) {
     (void)param;
     static const char *TAG = "lora_rx";
+    char file[640*2];
+    char filename[32];
+    uint32_t filesize;
+    file_server_client_t *server = ol_create_file_server();
+    memset(file, 0, 640*2);
+
+    ESP_LOGI(TAG, "Welcome to OpenLoRa File Transfer protocol server!");
+    while(1){
+        if (ol_receive_file_buffer(server, filename, (uint8_t *)file, &filesize, portMAX_DELAY) == pdTRUE){
+            ESP_LOGI(TAG, "Received file: %s of size: %ld", filename, filesize);
+            file[filesize] = '\0';
+            ESP_LOGI(TAG, "%s", file);
+            memset(file, 0, 640*2);
+        }else{
+            ESP_LOGI(TAG, "File reception error!");
+        }
+    }
+    #if 0
     char buffer[256];
     transport_layer_t server;
     server.protocol = TRANSP_STREAM;
@@ -243,6 +699,7 @@ void lora_receive_task(void *param) {
         ESP_LOGI(TAG, "Size: %d - %s", len, buffer);
         */
     }
+    #endif
 }
 
 void lora_receive_task_2(void *param) {
@@ -298,18 +755,6 @@ void lora_receive_task_3(void *param) {
 
 
 #define CHUNK 192
-
-const char *test_file = "Internet Engineering Task Force (IETF)\n"
-"Request for Comments: 8180               Universitat Oberta de Catalunya\n"
-"BCP: 210                                                       K. Pister\n"
-"Category: Best Current Practice        University of California Berkeley\n"
-"ISSN: 2070-1721                                              T. Watteyne\n"
-"                                                          Analog Devices\n"
-"                                                                May 2017\n"
-"                                                                \n"
-"Minimal IPv6 over the TSCH Mode of IEEE 802.15.4e (6TiSCH) Configuration\n"
-"\n"
-"Abstract\n";
 
 uint32_t compressBuffer(const char *file, char *dest, uint32_t size) {
     int ret, flush;
@@ -418,8 +863,8 @@ uint32_t decompressBuffer(char *uncompres, char *compres, int size) {
     return total_len;
 }
 
-char comp[512];
-char uncomp[640];
+char comp[640];
+char uncomp[640*2];
 void app_main()
 {
     printf("Hello world!\n");
@@ -440,40 +885,50 @@ void app_main()
     printf("%ldMB %s flash\n", size_flash_chip / (1024 * 1024),
             (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
 
+
+    /*
     uint32_t len = compressBuffer(test_file, comp, strlen(test_file));
     ESP_LOGI(TAG, "Compress size %ld\n\r", len);
 
     len = decompressBuffer(uncomp, comp, len);
     ESP_LOGI(TAG, "Uncompress size %ld\n\r", len);
     ESP_LOGI(TAG, "%s\n\r", uncomp);
+    */
 
    // Tarefas lora
    // Init LoRa with datarate 4, coding rate 5, channel 0, power level 20dBm, with PA Boost, CRC and explicit header
+   #if 0
    if (lora_init(4, 5, CHANNEL_0, 17, true, true, true)) {
         // init openlora stack
         #if MODE == RECEIVER
         if (ol_init(1, OL_BORDER_ROUTER_ADDR) == pdTRUE){
-            xTaskCreate(lora_receive_task, "task_lora_rx1", 3072, NULL, 4, NULL);
+            xTaskCreate(lora_receive_task, "task_lora_rx1", 3072+2048, NULL, 4, NULL);
             xTaskCreate(lora_receive_task_2, "task_lora_rx2", 2048, NULL, 4, NULL);
             xTaskCreate(lora_receive_task_3, "task_lora_rx3", 2048, NULL, 4, NULL);
         }
         #else
         if (ol_init(1, 1) == pdTRUE) {
-            xTaskCreate(lora_transmit_task, "task_lora_tx", 2048, NULL, 2, NULL);
+            xTaskCreate(lora_transmit_task, "task_lora_tx", 2048+1024, NULL, 2, NULL);
         }
         #endif
    }
+   #endif
 
    #if HAVE_OLED == 1
     // Tarefa OLED
    xTaskCreate(&task_test_SSD1306i2c, "task_oled", 10*1024, NULL, 4, NULL);
    #endif
 
-   // Tarefa cartão SD
-   //xTaskCreate(&task_sdcard, "task_sdcard", 10*1024, NULL, 3, NULL);
-   //xTaskCreate(&task_tasklist, "Task List", 4096, NULL,2,NULL);
-
+    mount_sdcard();
+    vTaskDelay(5000);
+    init_microphone();
+    ESP_LOGI(TAG, "Starting recording for %d seconds!", CONFIG_EXAMPLE_REC_TIME);
+    record_wav(5);
+    // Stop I2S driver and destroy
+    ESP_ERROR_CHECK(i2s_channel_disable(rx_handle));
+    ESP_ERROR_CHECK(i2s_del_channel(rx_handle));
 }
+
 
 
 #if MODE == TRANSMITTER
