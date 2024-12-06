@@ -286,8 +286,8 @@ void record_wav(uint32_t rec_time)
     ESP_LOGI(SDCARD_TAG, "File written on SDCard");
 
     // All done, unmount partition and disable SPI peripheral
-    esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, card);
-    ESP_LOGI(SDCARD_TAG, "Card unmounted");
+    //esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, card);
+    //ESP_LOGI(SDCARD_TAG, "Card unmounted");
     // Deinitialize the bus after all devices are removed
     #if (SDCARD_IF == SDCARD_SPI)
     spi_bus_free(host.slot);
@@ -357,7 +357,7 @@ struct file_io
 	FILE *output;
 };
 
-
+/*
 static FLAC__StreamEncoderWriteStatus encoder_write_callback_(const FLAC__StreamEncoder *encoder, const FLAC__byte buffer[], size_t bytes, uint32_t samples, uint32_t current_frame, void *client_data)
 {
 	//encoder_client_struct *ecd = (encoder_client_struct*)client_data;
@@ -375,6 +375,43 @@ static void encoder_metadata_callback_(const FLAC__StreamEncoder *encoder, const
 {
 	(void)encoder, (void)metadata, (void)client_data;
 }
+*/
+
+
+uint8_t sd_lock = 0;
+int file_system_ready = 1;
+FILE * open_file(const char * file, const char * flag)
+{
+	static const char *TAG = "open_file() ";
+	if (!file_system_ready)
+	{
+		ESP_LOGI(TAG, "File system not ready");
+		return NULL;
+	}
+	
+	/* Recieves the path to a file, and the mode to open. See
+		* fopen(3)
+		*/
+	ESP_LOGI(TAG, "Opening file");
+	FILE* f = fopen(file, flag);
+	if (f == NULL) {
+		ESP_LOGE(TAG, "Failed to open file: %s", file);
+		return NULL;
+	}
+
+	ESP_LOGI(TAG, "File opened");
+	sd_lock++;
+	return f;
+}
+
+void close_file(FILE * file)
+{
+	if (sd_lock)
+	{
+		fclose(file);
+		sd_lock--;
+	}
+}
 
 int flac_encode(void *p)
 {
@@ -385,19 +422,19 @@ int flac_encode(void *p)
 	FILE * fin = np->input;
 	FILE * fout = np->output;
 
-	unsigned total_samples = 0; /* can use a 32-bit number due to WAVE size limitations */
+	unsigned int total_samples = 0; /* can use a 32-bit number due to WAVE size limitations */
 	FLAC__byte buffer[READSIZE/*samples*/ * 2/*bytes_per_sample*/ * 1/*channels*/]; /* we read the WAVE data into here */
 	FLAC__int32 pcm[READSIZE/*samples*/ * 1/*channels*/];
-    FLAC__byte output_buffer[READSIZE*4];
+    //FLAC__byte output_buffer[READSIZE*4];
 
 
 	FLAC__bool ok = true;
 	FLAC__StreamEncoder *encoder = 0;
 	FLAC__StreamEncoderInitStatus init_status;
 
-	unsigned sample_rate = 0;
-	unsigned channels = 1;
-	unsigned bps = 16;
+	unsigned int sample_rate = 0;
+	unsigned int channels = 1;
+	unsigned int bps = 16;
 
 	// Check for input file
 	if(fin == NULL)
@@ -413,18 +450,31 @@ int flac_encode(void *p)
 		return -1;// FILE_NULL;
 	}
 
+    ESP_LOGI(TAG, "Start FLAC encoding ...");
+
 	/* read wav header and validate it */
 	if(
 		fread(buffer, 1, 44, fin) != 44 ||
 		memcmp(buffer, "RIFF", 4) ||
-		memcmp(buffer+8, "WAVEfmt \020\000\000\000\001\000\002\000", 16) ||
-		memcmp(buffer+32, "\004\000\020\000data", 8)
+        memcmp(buffer+8, "WAVEfmt", 7) ||
+        memcmp(buffer+16, "\x10\x00\x00\x00\x01\x00\x01\x00", 8) ||
+        memcmp(buffer+32, "\x02\x00\x10\x00", 4) || 
+        memcmp(buffer+36, "data", 4)
 	){
-		ESP_LOGE(SDCARD_TAG, "ERROR: invalid/unsupported WAVE file, only 16bps stereo WAVE in canonical form allowed");
+		ESP_LOGE(SDCARD_TAG, "ERROR: invalid/unsupported WAVE file");
+        ESP_LOGI(SDCARD_TAG, "header: %s", buffer);
+        ESP_LOGI(SDCARD_TAG, "header: %s", &buffer[8]);
+        ESP_LOGI(SDCARD_TAG, "header: %d,%d,%d,%d,%d,%d,%d,%d", buffer[16], buffer[17], buffer[18], buffer[19],buffer[20], buffer[21], buffer[22], buffer[23]);
+        ESP_LOGI(SDCARD_TAG, "header: %d,%d,%d,%d", buffer[32], buffer[33], buffer[34], buffer[35]);
+        ESP_LOGI(SDCARD_TAG, "header: %s", &buffer[36]);
 		return -1;// INVALID_WAV;
 	}
+
+    bps = (unsigned int)buffer[16];
 	sample_rate = ((((((unsigned)buffer[27] << 8) | buffer[26]) << 8) | buffer[25]) << 8) | buffer[24];
-	total_samples = (((((((unsigned)buffer[43] << 8) | buffer[42]) << 8) | buffer[41]) << 8) | buffer[40]) / 4;
+	total_samples = (((((((unsigned)buffer[43] << 8) | buffer[42]) << 8) | buffer[41]) << 8) | buffer[40]) / (channels*(bps/8));
+
+    ESP_LOGI(SDCARD_TAG, "Sample rate: %d - bits per sample: %d - total samples: %d - channels: %d", sample_rate, bps, total_samples, channels);
 
 	/* allocate the encoder */
 	if((encoder = FLAC__stream_encoder_new()) == NULL) {
@@ -444,8 +494,8 @@ int flac_encode(void *p)
 		// FLAC__stream_encoder_init_file is different from FLAC__stream_encoder_init_FILE
 		// Check https://www.xiph.org/flac/api/group__flac__stream__encoder.html
 
-		//init_status = FLAC__stream_encoder_init_FILE(encoder, fout, NULL, /*client_data=*/NULL);
-        init_status = FLAC__stream_encoder_init_stream(encoder, encoder_write_callback_, /*seek_callback=*/NULL, /*tell_callback=*/NULL, encoder_metadata_callback_, output_buffer);
+		init_status = FLAC__stream_encoder_init_FILE(encoder, fout, NULL, /*client_data=*/NULL);
+        //init_status = FLAC__stream_encoder_init_stream(encoder, encoder_write_callback_, /*seek_callback=*/NULL, /*tell_callback=*/NULL, encoder_metadata_callback_, output_buffer);
 		if(init_status != FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
             ESP_LOGE(
                 TAG,
@@ -491,11 +541,11 @@ int flac_encode(void *p)
 
 	// Check for finished encoder and ok status
     ESP_LOGI(TAG, "encoding %s", ok? "succeeded" : "failed");
-    ESP_LOGI(
-        TAG,
-        "state: %s",
-        FLAC__StreamEncoderStateString[FLAC__stream_encoder_get_state(encoder)]
-    );
+    //ESP_LOGI(
+    //    TAG,
+    //    "state: %s",
+    //    FLAC__StreamEncoderStateString[FLAC__stream_encoder_get_state(encoder)]
+    //);
 
 	FLAC__stream_encoder_delete(encoder);
 
@@ -907,7 +957,7 @@ void app_main()
 
    // Tarefas lora
    // Init LoRa with datarate 4, coding rate 5, channel 0, power level 20dBm, with PA Boost, CRC and explicit header
-   #if 0
+   #if 1
    if (lora_init(4, 5, CHANNEL_0, 17, true, true, true)) {
         // init openlora stack
         #if MODE == RECEIVER
@@ -929,6 +979,7 @@ void app_main()
    xTaskCreate(&task_test_SSD1306i2c, "task_oled", 10*1024, NULL, 4, NULL);
    #endif
 
+    #if 0
     mount_sdcard();
     vTaskDelay(5000);
     init_microphone();
@@ -937,6 +988,21 @@ void app_main()
     // Stop I2S driver and destroy
     ESP_ERROR_CHECK(i2s_channel_disable(rx_handle));
     ESP_ERROR_CHECK(i2s_del_channel(rx_handle));
+
+    struct file_io * p = (struct file_io *) malloc(sizeof(struct file_io));
+    // Open wav
+    p->input = open_file(SD_MOUNT_POINT"/record.wav", "r");
+    // Open flac (if it does not exists, will be created)
+    p->output = open_file(SD_MOUNT_POINT"/compress.flc", "w+");
+
+	//ESP_LOGI(TAG, "Launching FLAC task");
+    // Encode
+    //TaskHandle_t flac_handle = NULL;
+    //BaseType_t flac_returned = xTaskCreate(&flac_encode, "flac_encode", 4*64*1024, (void *)p, 3, flac_handle);
+    //ESP_LOGI(TAG, "input file: %ld", (uint32_t)p->input);
+    //ESP_LOGI(TAG, "output file: %ld", (uint32_t)p->output);
+    flac_encode((void *)p);
+    #endif
 }
 
 
