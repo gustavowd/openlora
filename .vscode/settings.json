@@ -3,6 +3,27 @@
     "files.associations": {
         "compare": "c",
         "cstdlib": "c",
-        "u8g2_esp32_hal.h": "c"
+        "u8g2_esp32_hal.h": "c",
+        "task.h": "c",
+        "freertos.h": "c",
+        "cstdint": "c",
+        "random": "c",
+        "u8g2.h": "c",
+        "esp_chip_info.h": "c",
+        "lora.h": "c",
+        "freertosconfig.h": "c",
+        "sdkconfig.h": "c",
+        "assert.h": "c",
+        "freertosconfig_arch.h": "c",
+        "xtensa_config.h": "c",
+        "reent.h": "c",
+        "spi_master.h": "c",
+        "gpio_struct.h": "c",
+        "esp_log.h": "c",
+        "cstdio": "cpp",
+        "stdint.h": "c",
+        "stdint-gcc.h": "c",
+        "stdio.h": "c",
+        "stdlib.h": "c"
     }
 }

@@ -99,7 +99,7 @@
 #define NUM_CHANNELS        (1) // For mono recording only!
 #define SD_MOUNT_POINT      "/sdcard"
 #define SAMPLE_SIZE         (8*4096)
-#define BYTE_RATE           (CONFIG_EXAMPLE_SAMPLE_RATE * (CONFIG_EXAMPLE_BIT_SAMPLE / 8)) * NUM_CHANNELS
+#define BYTE_RATE           (CONFIG_SAMPLE_RATE * (CONFIG_BIT_SAMPLE / 8)) * NUM_CHANNELS
 // Define the size of blocks to be read when flac encoding
 #define READSIZE			128
 static const char *SDCARD_TAG = "SDCARD";
@@ -245,7 +245,7 @@ void record_wav(uint32_t rec_time)
 
     uint32_t flash_rec_time = BYTE_RATE * rec_time;
     const wav_header_t wav_header =
-        WAV_HEADER_PCM_DEFAULT(flash_rec_time, 16, CONFIG_EXAMPLE_SAMPLE_RATE, 1);
+        WAV_HEADER_PCM_DEFAULT(flash_rec_time, 16, CONFIG_SAMPLE_RATE, 1);
 
     // First check if file exists before creating a new file.
     struct stat st;
@@ -318,7 +318,7 @@ void init_microphone(void)
     ESP_ERROR_CHECK(i2s_new_channel(&i2s_chan_cfg_rx, NULL, &rx_handle));
 
     i2s_std_config_t rx_std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(CONFIG_EXAMPLE_SAMPLE_RATE/2),
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(CONFIG_SAMPLE_RATE/2),
         .slot_cfg = {
             .data_bit_width = I2S_DATA_BIT_WIDTH_16BIT,
             .slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT,
@@ -483,7 +483,7 @@ int flac_encode(void *p)
 	}
 
 	ok &= FLAC__stream_encoder_set_verify(encoder, true);
-	ok &= FLAC__stream_encoder_set_compression_level(encoder, 0);
+	ok &= FLAC__stream_encoder_set_compression_level(encoder, 2);
 	ok &= FLAC__stream_encoder_set_channels(encoder, channels);
 	ok &= FLAC__stream_encoder_set_bits_per_sample(encoder, bps);
 	ok &= FLAC__stream_encoder_set_sample_rate(encoder, sample_rate);
@@ -963,8 +963,8 @@ void app_main()
         #if MODE == RECEIVER
         if (ol_init(1, OL_BORDER_ROUTER_ADDR) == pdTRUE){
             xTaskCreate(lora_receive_task, "task_lora_rx1", 3072+2048, NULL, 4, NULL);
-            xTaskCreate(lora_receive_task_2, "task_lora_rx2", 2048, NULL, 4, NULL);
-            xTaskCreate(lora_receive_task_3, "task_lora_rx3", 2048, NULL, 4, NULL);
+            //xTaskCreate(lora_receive_task_2, "task_lora_rx2", 2048, NULL, 4, NULL);
+            //xTaskCreate(lora_receive_task_3, "task_lora_rx3", 2048, NULL, 4, NULL);
         }
         #else
         if (ol_init(1, 1) == pdTRUE) {
@@ -983,8 +983,8 @@ void app_main()
     mount_sdcard();
     vTaskDelay(5000);
     init_microphone();
-    ESP_LOGI(TAG, "Starting recording for %d seconds!", CONFIG_EXAMPLE_REC_TIME);
-    record_wav(5);
+    ESP_LOGI(TAG, "Starting recording for %d seconds!", CONFIG_REC_TIME);
+    record_wav(CONFIG_REC_TIME);
     // Stop I2S driver and destroy
     ESP_ERROR_CHECK(i2s_channel_disable(rx_handle));
     ESP_ERROR_CHECK(i2s_del_channel(rx_handle));
