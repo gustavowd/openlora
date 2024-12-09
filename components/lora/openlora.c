@@ -909,11 +909,13 @@ uint32_t ol_send_file_buffer(file_server_client_t *server_client, uint8_t dst_ad
 uint32_t ol_send_file(file_server_client_t *server_client, uint8_t dst_addr, char *sd_path, char *filename, uint32_t segment_timeout) {
     char path_filename[32];
     strcpy(path_filename, sd_path);
+    strcat(path_filename, "/");
     strcat(path_filename, filename);
 
     FILE *file = fopen(path_filename, "r");
 
     if (file == NULL) {
+        ESP_LOGI(OPEN_LORA_TAG, "Fail to open file %s", path_filename);
         return pdFALSE;
     }
 
@@ -977,20 +979,24 @@ uint32_t ol_send_file(file_server_client_t *server_client, uint8_t dst_addr, cha
         app_header->payload_size = payload_size;
 
 
-        uint32_t bytes_read = (uint32_t)fread((void *)buffer, 1, FTP_BUFFER_SIZE, file);
+        payload = &buffer[sizeof(app_file_data_layer_header_t)];
+        uint32_t bytes_read = (uint32_t)fread((void *)payload, 1, payload_size, file);
+        //ESP_LOGI(OPEN_LORA_TAG, "Read %ld bytes with content %s", bytes_read, buffer);
         if (bytes_read == payload_size) {
-            mbedtls_md_update(&ctx, (const unsigned char *) buffer, payload_size);
-
+            mbedtls_md_update(&ctx, (const unsigned char *) payload, payload_size);
             payload = &buffer[sizeof(app_file_data_layer_header_t)];
             for (int i = 0; i < payload_size; i++) {
                 *payload++ = buffer[i];
             }
         }else{
+            mbedtls_md_free(&ctx);
             fclose(file);
             return pdFALSE;
         }
 
+        //ESP_LOGI(OPEN_LORA_TAG, "payload size %d", app_header->payload_size);
         len = app_header->payload_size + sizeof(app_file_data_layer_header_t);
+        //ESP_LOGI(OPEN_LORA_TAG, "Sending %d bytes using OpenLoRa", len);
         sent = ol_transp_send(&server_client->transp_handler, buffer, len, segment_timeout);
         if (sent != len){
             mbedtls_md_free(&ctx);

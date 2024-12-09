@@ -40,7 +40,7 @@
 
 #define TRANSMITTER 1
 #define RECEIVER    2
-#define MODE RECEIVER
+#define MODE TRANSMITTER
 
 
 #define BOARD_V1        1
@@ -651,9 +651,14 @@ void lora_transmit_task(void *param) {
     static const char *TAG = "lora_tx";
     file_server_client_t *client = ol_create_file_client();
 
+    //mount_sdcard();
     while(1){
-        ol_send_file_buffer(client, OL_BORDER_ROUTER_ADDR, "teste.txt", (uint8_t *)test_file, strlen(test_file), portMAX_DELAY);
-        ESP_LOGI(TAG, "Transmitted file: teste.txt of size: 625");
+        if (ol_send_file_buffer(client, OL_BORDER_ROUTER_ADDR, "teste.txt", (uint8_t *)test_file, strlen(test_file), portMAX_DELAY) == pdTRUE) {
+        //if (ol_send_file(client, OL_BORDER_ROUTER_ADDR, SD_MOUNT_POINT, "teste.txt", portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG, "Transmitted file: teste.txt of size: 625");
+        }else{
+            ESP_LOGI(TAG, "Fail to transmit file: teste.txt of size: 625");
+        }
         vTaskDelay(5000);
     }
 
@@ -730,10 +735,10 @@ void lora_receive_task(void *param) {
     memset(file, 0, 640*2);
 
     ESP_LOGI(TAG, "Welcome to OpenLoRa File Transfer protocol server!");
-    mount_sdcard();
+    //mount_sdcard();
     while(1){
-        //if (ol_receive_file_buffer(server, filename, (uint8_t *)file, &filesize, portMAX_DELAY) == pdTRUE){
-        if (ol_receive_file(server, SD_MOUNT_POINT, filename, &filesize, portMAX_DELAY) == pdTRUE){
+        if (ol_receive_file_buffer(server, filename, (uint8_t *)file, &filesize, portMAX_DELAY) == pdTRUE){
+        //if (ol_receive_file(server, SD_MOUNT_POINT, filename, &filesize, portMAX_DELAY) == pdTRUE){
             ESP_LOGI(TAG, "Received file: %s of size: %ld", filename, filesize);
             file[filesize] = '\0';
             ESP_LOGI(TAG, "%s", file);
