@@ -769,3 +769,487 @@ int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint
 }
 
 
+/************************************************************************************************************************
+ *
+ *          App Layler Functions
+ *
+ ************************************************************************************************************************/
+
+file_server_client_t *ol_create_file_client(void) {
+    file_server_client_t *client = pvPortMalloc(sizeof(file_server_client_t));
+    if (client != NULL) {
+        client->transp_handler.protocol = TRANSP_STREAM;
+        client->transp_handler.src_port = OL_TRANSPORT_CLIENT_PORT_INIT+1;
+        client->transp_handler.dst_port = FTP_PORT;
+        int ret =  ol_transp_open(&client->transp_handler);
+        if (ret == pdPASS){
+            return client;
+        }else{
+            vPortFree(client);
+        }
+    }
+    return NULL;
+}
+
+file_server_client_t *ol_create_file_server(void) {
+    file_server_client_t *server = pvPortMalloc(sizeof(file_server_client_t));
+    if (server != NULL) {
+        server->transp_handler.protocol = TRANSP_STREAM;
+        server->transp_handler.src_port = FTP_PORT;
+        server->transp_handler.dst_port = OL_TRANSPORT_CLIENT_PORT_INIT+1;
+        int ret =  ol_transp_open(&server->transp_handler);
+        if (ret == pdPASS){
+            return server;
+        }else{
+            vPortFree(server);
+        }
+    }
+    return NULL;
+}
+
+
+uint32_t ol_send_file_buffer(file_server_client_t *server_client, uint8_t dst_addr, char *filename, uint8_t *file, uint32_t file_size, uint32_t segment_timeout) {
+    uint16_t seq_num = 0;
+
+    mbedtls_md_context_t ctx;
+    mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
+
+    mbedtls_md_init(&ctx);
+    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 0);
+    mbedtls_md_starts(&ctx);
+
+    server_client->transp_handler.dst_addr = dst_addr;
+
+    uint8_t buffer[FTP_BUFFER_SIZE];
+    app_file_data_layer_header_t *app_header = (app_file_data_layer_header_t *)&buffer;
+
+    // first packet send
+    app_header->app_packet_type = FILE_START_PACKET;
+    app_header->seq_number = seq_num;
+    app_header->payload_size = strlen(filename) + 5;  // 4 = filesize + 1 str end character
+
+    char *name = filename;
+    uint8_t *payload = &buffer[sizeof(app_file_data_layer_header_t)];
+    while(*name){
+        *payload++ = *name++;
+    }
+    *payload++ = '\0';
+    uint32_t *size = (uint32_t *)payload;
+    *size = file_size;
+
+    int len = app_header->payload_size + sizeof(app_file_data_layer_header_t);
+    int sent = ol_transp_send(&server_client->transp_handler, buffer, len, segment_timeout);
+    if (sent != len){
+        mbedtls_md_free(&ctx);
+        return pdFALSE;
+    }
+    seq_num++;
+    memset(buffer, 0, FTP_BUFFER_SIZE);
+
+    uint32_t fsize = file_size;
+    uint16_t payload_size = 0;
+    do {
+        // data packets
+        app_header->app_packet_type = FILE_DATA_PACKET;
+        app_header->seq_number = seq_num;
+        if (fsize >= FTP_MAX_PAYLOAD_SIZE){
+            payload_size = FTP_MAX_PAYLOAD_SIZE;
+        }else {
+            payload_size = (uint16_t)fsize;
+        }
+        app_header->payload_size = payload_size;
+
+        mbedtls_md_update(&ctx, (const unsigned char *) file, payload_size);
+
+        payload = &buffer[sizeof(app_file_data_layer_header_t)];
+        for (int i = 0; i < payload_size; i++) {
+            *payload++ = *file++;
+        }
+
+        len = app_header->payload_size + sizeof(app_file_data_layer_header_t);
+        sent = ol_transp_send(&server_client->transp_handler, buffer, len, segment_timeout);
+        if (sent != len){
+            mbedtls_md_free(&ctx);
+            return pdFALSE;
+        }
+        fsize -= (sent-sizeof(app_file_data_layer_header_t));
+        seq_num++;
+        memset(buffer, 0, FTP_BUFFER_SIZE);
+    }while(fsize);
+
+    // last packet send
+    app_header->app_packet_type = FILE_END_PACKET;
+    app_header->seq_number = seq_num;
+    app_header->payload_size = 64+8;
+
+    uint8_t sha_result[32];
+    mbedtls_md_finish(&ctx, sha_result);
+    mbedtls_md_free(&ctx);
+
+    name = "SHA256: ";
+    payload = &buffer[sizeof(app_file_data_layer_header_t)];
+    while(*name){
+        *payload++ = *name++;
+    }
+    char str[3];
+    for (int j = 0; j<32; j++) {
+        sprintf(str, "%02x", (int)sha_result[j]);
+        *payload++ = str[0];
+        *payload++ = str[1];
+    }
+
+    len = app_header->payload_size + sizeof(app_file_data_layer_header_t);
+    sent = ol_transp_send(&server_client->transp_handler, buffer, len, segment_timeout);
+    if (sent != len){
+        return pdFALSE;
+    }
+    return pdTRUE;
+}
+
+uint32_t ol_send_file(file_server_client_t *server_client, uint8_t dst_addr, char *sd_path, char *filename, uint32_t segment_timeout) {
+    char path_filename[32];
+    strcpy(path_filename, sd_path);
+    strcat(path_filename, filename);
+
+    FILE *file = fopen(path_filename, "r");
+
+    if (file == NULL) {
+        return pdFALSE;
+    }
+
+    uint16_t seq_num = 0;
+
+    mbedtls_md_context_t ctx;
+    mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
+
+    mbedtls_md_init(&ctx);
+    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 0);
+    mbedtls_md_starts(&ctx);
+
+    server_client->transp_handler.dst_addr = dst_addr;
+
+    uint8_t buffer[FTP_BUFFER_SIZE];
+    app_file_data_layer_header_t *app_header = (app_file_data_layer_header_t *)&buffer;
+
+    // first packet send
+    app_header->app_packet_type = FILE_START_PACKET;
+    app_header->seq_number = seq_num;
+    app_header->payload_size = strlen(filename) + 5;  // 4 = filesize + 1 str end character
+
+    char *name = filename;
+    uint8_t *payload = &buffer[sizeof(app_file_data_layer_header_t)];
+    while(*name){
+        *payload++ = *name++;
+    }
+    *payload++ = '\0';
+    uint32_t *size = (uint32_t *)payload;
+
+    struct stat st;
+    if (stat(path_filename, &st) == 0)
+    {
+        *size = st.st_size;
+    }else{
+        fclose(file);
+        return pdFALSE;
+    }
+
+    int len = app_header->payload_size + sizeof(app_file_data_layer_header_t);
+    int sent = ol_transp_send(&server_client->transp_handler, buffer, len, segment_timeout);
+    if (sent != len){
+        mbedtls_md_free(&ctx);
+        return pdFALSE;
+    }
+    seq_num++;
+    memset(buffer, 0, FTP_BUFFER_SIZE);
+
+    uint32_t fsize = (uint32_t)st.st_size;
+    uint16_t payload_size = 0;
+
+    do {
+        // data packets
+        app_header->app_packet_type = FILE_DATA_PACKET;
+        app_header->seq_number = seq_num;
+        if (fsize >= FTP_MAX_PAYLOAD_SIZE){
+            payload_size = FTP_MAX_PAYLOAD_SIZE;
+        }else {
+            payload_size = (uint16_t)fsize;
+        }
+        app_header->payload_size = payload_size;
+
+
+        uint32_t bytes_read = (uint32_t)fread((void *)buffer, 1, FTP_BUFFER_SIZE, file);
+        if (bytes_read == payload_size) {
+            mbedtls_md_update(&ctx, (const unsigned char *) buffer, payload_size);
+
+            payload = &buffer[sizeof(app_file_data_layer_header_t)];
+            for (int i = 0; i < payload_size; i++) {
+                *payload++ = buffer[i];
+            }
+        }else{
+            fclose(file);
+            return pdFALSE;
+        }
+
+        len = app_header->payload_size + sizeof(app_file_data_layer_header_t);
+        sent = ol_transp_send(&server_client->transp_handler, buffer, len, segment_timeout);
+        if (sent != len){
+            mbedtls_md_free(&ctx);
+            fclose(file);
+            return pdFALSE;
+        }
+        fsize -= (sent-sizeof(app_file_data_layer_header_t));
+        seq_num++;
+        memset(buffer, 0, FTP_BUFFER_SIZE);
+        //ESP_LOGI(OPEN_LORA_TAG, "File size %d", fsize);
+    }while(fsize);
+
+    // last packet send
+    app_header->app_packet_type = FILE_END_PACKET;
+    app_header->seq_number = seq_num;
+    app_header->payload_size = 64+8;
+
+    uint8_t sha_result[32];
+    mbedtls_md_finish(&ctx, sha_result);
+    mbedtls_md_free(&ctx);
+
+    name = "SHA256: ";
+    payload = &buffer[sizeof(app_file_data_layer_header_t)];
+    while(*name){
+        *payload++ = *name++;
+    }
+    char str[3];
+    for (int j = 0; j<32; j++) {
+        sprintf(str, "%02x", (int)sha_result[j]);
+        *payload++ = str[0];
+        *payload++ = str[1];
+    }
+
+    len = app_header->payload_size + sizeof(app_file_data_layer_header_t);
+    sent = ol_transp_send(&server_client->transp_handler, buffer, len, segment_timeout);
+    if (sent != len){
+        return pdFALSE;
+    }
+    return pdTRUE;
+}
+
+uint32_t ol_receive_file_buffer(file_server_client_t *server_client, char *filename, uint8_t *file, uint32_t *file_size, uint32_t segment_timeout) {
+    uint16_t seq_number = 0;
+    uint8_t buffer[FTP_BUFFER_SIZE];
+
+    int len = ol_transp_recv(&server_client->transp_handler, buffer, segment_timeout);
+    app_file_data_layer_header_t *app_header = (app_file_data_layer_header_t *)&buffer;
+
+    uint32_t fsize = 0;
+    mbedtls_md_context_t ctx;
+    mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
+    uint8_t *payload;
+
+    if ((app_header->app_packet_type == FILE_START_PACKET) && (app_header->seq_number == seq_number) && (len <= FTP_BUFFER_SIZE)) {
+        seq_number++;
+
+        payload = &buffer[sizeof(app_file_data_layer_header_t)];
+        char *filename_tmp = (char *)payload;
+        uint32_t filename_len = strlen(filename_tmp);
+        strcpy(filename, filename_tmp);
+        fsize = *(uint32_t *)&payload[filename_len + 1];
+        uint32_t total_fsize = fsize;
+        *file_size = fsize;
+        if ((filename_len > 0) && (fsize > 0)) {
+            ESP_LOGI(OPEN_LORA_TAG, "Receiving file %s with %ld bytes", filename, total_fsize);
+            mbedtls_md_init(&ctx);
+            mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 0);
+            mbedtls_md_starts(&ctx);
+        }else{
+            return pdFALSE;
+        }
+    }else {
+        return pdFALSE;
+    }
+
+    do {
+        len = ol_transp_recv(&server_client->transp_handler, buffer, segment_timeout);
+        if ((app_header->app_packet_type == FILE_DATA_PACKET) && (app_header->seq_number == seq_number) && (len <= FTP_BUFFER_SIZE)) {
+            payload = &buffer[sizeof(app_file_data_layer_header_t)];
+            memcpy(file, payload, app_header->payload_size);
+            file += app_header->payload_size;
+            ESP_LOGI(OPEN_LORA_TAG, "Seq: %d, Payload: %d", seq_number, app_header->payload_size);
+            //ESP_LOGI(OPEN_LORA_TAG, "Payload: %s", payload);
+            seq_number++;
+            fsize -= app_header->payload_size;
+            mbedtls_md_update(&ctx, (const unsigned char *) payload, app_header->payload_size);
+        }else {
+            ESP_LOGI(OPEN_LORA_TAG, "Reception error: Packet type: %d - Seq. number: %d", app_header->app_packet_type, app_header->seq_number);
+            mbedtls_md_free(&ctx);
+            return pdFALSE;
+        }
+    }while (fsize);
+
+    /*
+    int segment_size = 0;
+    uint16_t payload_size = 0;
+    do {
+        len = ol_transp_recv(&server_client->transp_handler, buffer, segment_timeout);
+        if (!segment_size) {
+            if ((app_header->app_packet_type == FILE_DATA_PACKET) && (app_header->seq_number == seq_number)) {
+                payload = &buffer[sizeof(app_file_data_layer_header_t)];
+                memcpy(file, payload, len-sizeof(app_file_data_layer_header_t));
+                file += len-sizeof(app_file_data_layer_header_t);
+                segment_size += len-sizeof(app_file_data_layer_header_t);
+                ESP_LOGI(OPEN_LORA_TAG, "Seq: %d, Payload: %d", seq_number, app_header->payload_size);
+                seq_number++;
+                fsize -= len-sizeof(app_file_data_layer_header_t);
+                payload_size = app_header->payload_size;
+                mbedtls_md_update(&ctx, (const unsigned char *) payload, len-sizeof(app_file_data_layer_header_t));
+            }else {
+                ESP_LOGI(OPEN_LORA_TAG, "Reception error: Packet type: %d - Seq. number: %d", app_header->app_packet_type, app_header->seq_number);
+                mbedtls_md_free(&ctx);
+                return pdFALSE;
+            }
+        }else {
+            memcpy(file, buffer, len);
+            file += len;
+            fsize -= len;
+            mbedtls_md_update(&ctx, (const unsigned char *) buffer, len);
+            segment_size += len;
+            if (segment_size == payload_size){
+                segment_size = 0;
+            }
+        }
+    }while (fsize);
+    */
+
+    len = ol_transp_recv(&server_client->transp_handler, buffer, segment_timeout);
+    if ((app_header->app_packet_type == FILE_END_PACKET) && (app_header->seq_number == seq_number) && (len <= FTP_BUFFER_SIZE)) {
+        uint8_t sha_result[32];
+        mbedtls_md_finish(&ctx, sha_result);
+        mbedtls_md_free(&ctx);
+
+        // validar hash
+        char str[3];
+        char hash[65];
+        int i = 0;
+        for (int j = 0; j<32; j++) {
+            sprintf(str, "%02x", (int)sha_result[j]);
+            hash[i++] = str[0];
+            hash[i++] = str[1];
+        }
+        hash[64] = '\0';
+        char *packet_hash = (char *)&buffer[sizeof(app_file_data_layer_header_t)];
+        //ESP_LOGI(OPEN_LORA_TAG, "hash: %s\n\rpacket_hash: %s", hash, packet_hash);
+        if (strncmp("SHA256: ", packet_hash, 8) == 0) {
+            packet_hash = (char *)&buffer[sizeof(app_file_data_layer_header_t)+8];
+            if (strncmp(hash, packet_hash, 64) == 0) {
+                return pdTRUE;
+            }else{
+                return pdFALSE;
+            }
+        }else{
+            return pdFALSE;
+        }
+    }
+    mbedtls_md_free(&ctx);
+    return pdFALSE;
+}
+
+uint32_t ol_receive_file(file_server_client_t *server_client, char *sd_path, char *filename, uint32_t *file_size, uint32_t segment_timeout) {
+    uint16_t seq_number = 0;
+    uint8_t buffer[FTP_BUFFER_SIZE];
+
+    int len = ol_transp_recv(&server_client->transp_handler, buffer, segment_timeout);
+    app_file_data_layer_header_t *app_header = (app_file_data_layer_header_t *)&buffer;
+
+    uint32_t fsize = 0;
+    mbedtls_md_context_t ctx;
+    mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
+    uint8_t *payload;
+    FILE *file = NULL;
+
+    if ((app_header->app_packet_type == FILE_START_PACKET) && (app_header->seq_number == seq_number) && (len <= FTP_BUFFER_SIZE)) {
+        seq_number++;
+        char path_filename[32];
+        strcpy(path_filename, sd_path);
+
+        payload = &buffer[sizeof(app_file_data_layer_header_t)];
+        char *filename_tmp = (char *)payload;
+        uint32_t filename_len = strlen(filename_tmp);
+        strcpy(filename, filename_tmp);
+        fsize = *(uint32_t *)&payload[filename_len + 1];
+        uint32_t total_fsize = fsize;
+        *file_size = fsize;
+        if ((filename_len > 0) && (fsize > 0)) {
+            strcat(path_filename, "/");
+            strcat(path_filename, filename);
+            ESP_LOGI(OPEN_LORA_TAG, "Receiving file %s with %ld bytes", filename, total_fsize);
+            ESP_LOGI(OPEN_LORA_TAG, "Opening to write %s", path_filename);
+            file = fopen(path_filename, "w+");
+            if (file != NULL) {
+                mbedtls_md_init(&ctx);
+                mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 0);
+                mbedtls_md_starts(&ctx);
+            }else {
+                return pdFALSE;
+            }
+        }else{
+            return pdFALSE;
+        }
+    }else {
+        return pdFALSE;
+    }
+
+    do {
+        len = ol_transp_recv(&server_client->transp_handler, buffer, segment_timeout);
+        if ((app_header->app_packet_type == FILE_DATA_PACKET) && (app_header->seq_number == seq_number) && (len <= FTP_BUFFER_SIZE)) {
+            payload = &buffer[sizeof(app_file_data_layer_header_t)];
+            int numwritten = fwrite(payload, 1, app_header->payload_size, file);
+            if (numwritten == app_header->payload_size) {
+                ESP_LOGI(OPEN_LORA_TAG, "Seq: %d, Payload: %d", seq_number, app_header->payload_size);
+                //ESP_LOGI(OPEN_LORA_TAG, "Payload: %s", payload);
+                seq_number++;
+                fsize -= app_header->payload_size;
+                mbedtls_md_update(&ctx, (const unsigned char *) payload, app_header->payload_size);
+            }else {
+                ESP_LOGI(OPEN_LORA_TAG, "Reception error (when written SD CARD): Packet type: %d - Seq. number: %d", app_header->app_packet_type, app_header->seq_number);
+                fclose(file);
+                mbedtls_md_free(&ctx);
+            }
+        }else {
+            ESP_LOGI(OPEN_LORA_TAG, "Reception error: Packet type: %d - Seq. number: %d", app_header->app_packet_type, app_header->seq_number);
+            fclose(file);
+            mbedtls_md_free(&ctx);
+            return pdFALSE;
+        }
+    }while (fsize);
+    fclose(file);
+
+    len = ol_transp_recv(&server_client->transp_handler, buffer, segment_timeout);
+    if ((app_header->app_packet_type == FILE_END_PACKET) && (app_header->seq_number == seq_number) && (len <= FTP_BUFFER_SIZE)) {
+        uint8_t sha_result[32];
+        mbedtls_md_finish(&ctx, sha_result);
+        mbedtls_md_free(&ctx);
+
+        // validar hash
+        char str[3];
+        char hash[65];
+        int i = 0;
+        for (int j = 0; j<32; j++) {
+            sprintf(str, "%02x", (int)sha_result[j]);
+            hash[i++] = str[0];
+            hash[i++] = str[1];
+        }
+        hash[64] = '\0';
+        char *packet_hash = (char *)&buffer[sizeof(app_file_data_layer_header_t)];
+        //ESP_LOGI(OPEN_LORA_TAG, "hash: %s\n\rpacket_hash: %s", hash, packet_hash);
+        if (strncmp("SHA256: ", packet_hash, 8) == 0) {
+            packet_hash = (char *)&buffer[sizeof(app_file_data_layer_header_t)+8];
+            if (strncmp(hash, packet_hash, 64) == 0) {
+                return pdTRUE;
+            }else{
+                return pdFALSE;
+            }
+        }else{
+            return pdFALSE;
+        }
+    }
+    mbedtls_md_free(&ctx);
+    return pdFALSE;
+}

@@ -162,3 +162,5 @@ file_server_client_t *ol_create_file_client(void);
 file_server_client_t *ol_create_file_server(void);
 uint32_t ol_send_file_buffer(file_server_client_t *server_client, uint8_t dst_addr, char *filename, uint8_t *file, uint32_t file_size, uint32_t segment_timeout);
 uint32_t ol_receive_file_buffer(file_server_client_t *server_client, char *filename, uint8_t *file, uint32_t *file_size, uint32_t segment_timeout);
+uint32_t ol_send_file(file_server_client_t *server_client, uint8_t dst_addr, char *sd_path, char *filename, uint32_t segment_timeout);
+uint32_t ol_receive_file(file_server_client_t *server_client, char *sd_path, char *filename, uint32_t *file_size, uint32_t segment_timeout);

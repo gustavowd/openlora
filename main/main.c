@@ -94,6 +94,10 @@
 #define SDCARD_MMC  2
 #define SDCARD_IF   SDCARD_MMC
 
+#define FLAC_FILE    1
+#define FLAC_STREAM  2
+#define FLAC_FILE_OR_STREAM   FLAC_FILE
+
 /* SD Card and record WAV files definitions */
 #define SPI_DMA_CHAN        SPI_DMA_CH_AUTO
 #define NUM_CHANNELS        (1) // For mono recording only!
@@ -357,17 +361,11 @@ struct file_io
 	FILE *output;
 };
 
-/*
+#if (FLAC_FILE_OR_STREAM == FLAC_STREAM)
 static FLAC__StreamEncoderWriteStatus encoder_write_callback_(const FLAC__StreamEncoder *encoder, const FLAC__byte buffer[], size_t bytes, uint32_t samples, uint32_t current_frame, void *client_data)
 {
-	//encoder_client_struct *ecd = (encoder_client_struct*)client_data;
-
 	(void)encoder, (void)samples, (void)current_frame;
-
 	memcpy(client_data, buffer, bytes);
-    //if(local__fwrite(buffer, 1, bytes, ecd->file) != bytes)
-	//	return FLAC__STREAM_ENCODER_WRITE_STATUS_FATAL_ERROR;
-	//else
 	return FLAC__STREAM_ENCODER_WRITE_STATUS_OK;
 }
 
@@ -375,9 +373,10 @@ static void encoder_metadata_callback_(const FLAC__StreamEncoder *encoder, const
 {
 	(void)encoder, (void)metadata, (void)client_data;
 }
-*/
+#endif
 
 
+#if (FLAC_FILE_OR_STREAM == FLAC_FILE)
 uint8_t sd_lock = 0;
 int file_system_ready = 1;
 FILE * open_file(const char * file, const char * flag)
@@ -412,20 +411,25 @@ void close_file(FILE * file)
 		sd_lock--;
 	}
 }
+#endif
 
 int flac_encode(void *p)
 {
 	const char *TAG = "flac_encode()";
 
 	// Needed variables
+    #if (FLAC_FILE_OR_STREAM == FLAC_FILE)
 	struct file_io * np = (struct file_io *)p;
 	FILE * fin = np->input;
 	FILE * fout = np->output;
+    #endif
 
 	unsigned int total_samples = 0; /* can use a 32-bit number due to WAVE size limitations */
 	FLAC__byte buffer[READSIZE/*samples*/ * 2/*bytes_per_sample*/ * 1/*channels*/]; /* we read the WAVE data into here */
 	FLAC__int32 pcm[READSIZE/*samples*/ * 1/*channels*/];
-    //FLAC__byte output_buffer[READSIZE*4];
+    #if (FLAC_FILE_OR_STREAM == FLAC_STREAM)
+    FLAC__byte output_buffer[READSIZE*4];
+    #endif
 
 
 	FLAC__bool ok = true;
@@ -437,6 +441,7 @@ int flac_encode(void *p)
 	unsigned int bps = 16;
 
 	// Check for input file
+    #if (FLAC_FILE_OR_STREAM == FLAC_FILE)
 	if(fin == NULL)
 	{
 		ESP_LOGE(TAG, "ERROR: input file is NULL");
@@ -449,6 +454,7 @@ int flac_encode(void *p)
 		ESP_LOGE(TAG, "ERROR: output file is NULL");
 		return -1;// FILE_NULL;
 	}
+    #endif
 
     ESP_LOGI(TAG, "Start FLAC encoding ...");
 
@@ -494,8 +500,12 @@ int flac_encode(void *p)
 		// FLAC__stream_encoder_init_file is different from FLAC__stream_encoder_init_FILE
 		// Check https://www.xiph.org/flac/api/group__flac__stream__encoder.html
 
+        #if (FLAC_FILE_OR_STREAM == FLAC_FILE)
 		init_status = FLAC__stream_encoder_init_FILE(encoder, fout, NULL, /*client_data=*/NULL);
-        //init_status = FLAC__stream_encoder_init_stream(encoder, encoder_write_callback_, /*seek_callback=*/NULL, /*tell_callback=*/NULL, encoder_metadata_callback_, output_buffer);
+        #endif
+        #if (FLAC_FILE_OR_STREAM == FLAC_STREAM)
+        init_status = FLAC__stream_encoder_init_stream(encoder, encoder_write_callback_, /*seek_callback=*/NULL, /*tell_callback=*/NULL, encoder_metadata_callback_, output_buffer);
+        #endif
 		if(init_status != FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
             ESP_LOGE(
                 TAG,
@@ -720,8 +730,10 @@ void lora_receive_task(void *param) {
     memset(file, 0, 640*2);
 
     ESP_LOGI(TAG, "Welcome to OpenLoRa File Transfer protocol server!");
+    mount_sdcard();
     while(1){
-        if (ol_receive_file_buffer(server, filename, (uint8_t *)file, &filesize, portMAX_DELAY) == pdTRUE){
+        //if (ol_receive_file_buffer(server, filename, (uint8_t *)file, &filesize, portMAX_DELAY) == pdTRUE){
+        if (ol_receive_file(server, SD_MOUNT_POINT, filename, &filesize, portMAX_DELAY) == pdTRUE){
             ESP_LOGI(TAG, "Received file: %s of size: %ld", filename, filesize);
             file[filesize] = '\0';
             ESP_LOGI(TAG, "%s", file);
@@ -820,7 +832,6 @@ uint32_t compressBuffer(const char *file, char *dest, uint32_t size) {
     int ret, flush;
     unsigned have;
     z_stream strm;
-    //unsigned char in[CHUNK];
     uint8_t *source = (uint8_t *)file;
     unsigned char out[CHUNK];
 
