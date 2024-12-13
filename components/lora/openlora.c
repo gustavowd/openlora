@@ -1216,7 +1216,7 @@ uint32_t ol_receive_file_buffer(file_server_client_t *server_client, char *filen
                 if (ret != Z_OK){
                     mbedtls_md_free(&ctx);
                     return pdFALSE;
-                } 
+                }
             }else{
                 ESP_LOGI(OPEN_LORA_TAG, "Receiving file %s with %ld bytes", filename, total_fsize);
             }
@@ -1240,7 +1240,6 @@ uint32_t ol_receive_file_buffer(file_server_client_t *server_client, char *filen
 
                 // Run inflate() on input until output buffer not full
                 uint8_t out[FTP_MAX_PAYLOAD_SIZE];
-                memset(out, 0, FTP_MAX_PAYLOAD_SIZE);
                 do {
                     strm.avail_out = FTP_MAX_PAYLOAD_SIZE;
                     strm.next_out = out;
@@ -1329,8 +1328,11 @@ uint32_t ol_receive_file(file_server_client_t *server_client, char *sd_path, cha
     mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
     uint8_t *payload;
     FILE *file = NULL;
+    bool compress = false;
+    int ret;
+    z_stream strm;
 
-    if ((app_header->app_packet_type == FILE_START_PACKET) && (app_header->seq_number == seq_number) && (len <= FTP_BUFFER_SIZE)) {
+    if (((app_header->app_packet_type == FILE_START_PACKET) || (app_header->app_packet_type == FILE_START_COMPRESS_PACKET)) && (app_header->seq_number == seq_number) && (len <= FTP_BUFFER_SIZE)) {
         seq_number++;
         char path_filename[32];
         strcpy(path_filename, sd_path);
@@ -1345,13 +1347,28 @@ uint32_t ol_receive_file(file_server_client_t *server_client, char *sd_path, cha
         if ((filename_len > 0) && (fsize > 0)) {
             strcat(path_filename, "/");
             strcat(path_filename, filename);
-            ESP_LOGI(OPEN_LORA_TAG, "Receiving file %s with %ld bytes", filename, total_fsize);
-            ESP_LOGI(OPEN_LORA_TAG, "Opening to write %s", path_filename);
+            //ESP_LOGI(OPEN_LORA_TAG, "Opening to write %s", path_filename);
             file = fopen(path_filename, "w+");
             if (file != NULL) {
                 mbedtls_md_init(&ctx);
                 mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 0);
                 mbedtls_md_starts(&ctx);
+
+                if (app_header->app_packet_type == FILE_START_COMPRESS_PACKET){
+                    ESP_LOGI(OPEN_LORA_TAG, "Receiving compressed file %s with %ld bytes", filename, total_fsize);
+                    compress = true;
+                    // Initialize the zlib stream for decompression
+                    strm.zalloc = Z_NULL;
+                    strm.zfree = Z_NULL;
+                    strm.opaque = Z_NULL;
+                    ret = inflateInit(&strm);
+                    if (ret != Z_OK){
+                        mbedtls_md_free(&ctx);
+                        return pdFALSE;
+                    }
+                }else{
+                    ESP_LOGI(OPEN_LORA_TAG, "Receiving file %s with %ld bytes", filename, total_fsize);
+                }
             }else {
                 return pdFALSE;
             }
@@ -1366,18 +1383,57 @@ uint32_t ol_receive_file(file_server_client_t *server_client, char *sd_path, cha
         len = ol_transp_recv(&server_client->transp_handler, buffer, segment_timeout);
         if ((app_header->app_packet_type == FILE_DATA_PACKET) && (app_header->seq_number == seq_number) && (len <= FTP_BUFFER_SIZE)) {
             payload = &buffer[sizeof(app_file_data_layer_header_t)];
-            int numwritten = fwrite(payload, 1, app_header->payload_size, file);
-            if (numwritten == app_header->payload_size) {
-                ESP_LOGI(OPEN_LORA_TAG, "Seq: %d, Payload: %d", seq_number, app_header->payload_size);
-                //ESP_LOGI(OPEN_LORA_TAG, "Payload: %s", payload);
-                seq_number++;
-                fsize -= app_header->payload_size;
-                mbedtls_md_update(&ctx, (const unsigned char *) payload, app_header->payload_size);
-            }else {
-                ESP_LOGI(OPEN_LORA_TAG, "Reception error (when written SD CARD): Packet type: %d - Seq. number: %d", app_header->app_packet_type, app_header->seq_number);
-                fclose(file);
-                mbedtls_md_free(&ctx);
+            if (compress){
+                unsigned int have;
+                strm.avail_in = len-sizeof(app_file_data_layer_header_t);
+                strm.next_in = (Bytef *)payload;
+                //ESP_LOGI(OPEN_LORA_TAG, "Payload size: %d", app_header->payload_size);
+
+                // Run inflate() on input until output buffer not full
+                uint8_t out[FTP_MAX_PAYLOAD_SIZE];
+                do {
+                    strm.avail_out = FTP_MAX_PAYLOAD_SIZE;
+                    strm.next_out = out;
+                    ret = inflate(&strm, Z_NO_FLUSH);
+                    assert(ret != Z_STREAM_ERROR);
+                    switch (ret) {
+                        case Z_NEED_DICT:
+                        case Z_DATA_ERROR:
+                        case Z_MEM_ERROR:
+                            ESP_LOGI(OPEN_LORA_TAG, "Decopress error: %d", ret);
+                            (void)inflateEnd(&strm);
+                            fclose(file);
+                            mbedtls_md_free(&ctx);
+                            return pdFALSE;
+                    }
+                    have = FTP_MAX_PAYLOAD_SIZE - strm.avail_out;
+                    int numwritten = fwrite(out, 1, have, file);
+                    if (numwritten == have) {
+                        ESP_LOGI(OPEN_LORA_TAG, "Seq: %d, Payload: %d", seq_number, have);
+                        fsize -= have;
+                        mbedtls_md_update(&ctx, (const unsigned char *) out, have);
+                        //ESP_LOGI(OPEN_LORA_TAG, "Payload: %s", out);
+                    }else {
+                        ESP_LOGI(OPEN_LORA_TAG, "Reception error (when written SD CARD): Packet type: %d - Seq. number: %d", app_header->app_packet_type, app_header->seq_number);
+                        (void)inflateEnd(&strm);
+                        fclose(file);
+                        mbedtls_md_free(&ctx);
+                    }
+                } while (strm.avail_out == 0);
+            }else{
+                int numwritten = fwrite(payload, 1, app_header->payload_size, file);
+                if (numwritten == app_header->payload_size) {
+                    ESP_LOGI(OPEN_LORA_TAG, "Seq: %d, Payload: %d", seq_number, app_header->payload_size);
+                    //ESP_LOGI(OPEN_LORA_TAG, "Payload: %s", payload);
+                    fsize -= app_header->payload_size;
+                    mbedtls_md_update(&ctx, (const unsigned char *) payload, app_header->payload_size);
+                }else {
+                    ESP_LOGI(OPEN_LORA_TAG, "Reception error (when written SD CARD): Packet type: %d - Seq. number: %d", app_header->app_packet_type, app_header->seq_number);
+                    fclose(file);
+                    mbedtls_md_free(&ctx);
+                }
             }
+            seq_number++;
         }else {
             ESP_LOGI(OPEN_LORA_TAG, "Reception error: Packet type: %d - Seq. number: %d", app_header->app_packet_type, app_header->seq_number);
             fclose(file);
@@ -1386,9 +1442,13 @@ uint32_t ol_receive_file(file_server_client_t *server_client, char *sd_path, cha
         }
     }while (fsize);
     fclose(file);
+    if (compress){
+        // Clean up
+        (void)inflateEnd(&strm);
+    }
 
     len = ol_transp_recv(&server_client->transp_handler, buffer, segment_timeout);
-    if ((app_header->app_packet_type == FILE_END_PACKET) && (app_header->seq_number == seq_number) && (len <= FTP_BUFFER_SIZE)) {
+    if (((app_header->app_packet_type == FILE_END_PACKET) || (app_header->app_packet_type == FILE_END_COMPRESS_PACKET)) && (app_header->seq_number == seq_number) && (len <= FTP_BUFFER_SIZE)) {
         uint8_t sha_result[32];
         mbedtls_md_finish(&ctx, sha_result);
         mbedtls_md_free(&ctx);

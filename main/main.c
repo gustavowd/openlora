@@ -651,13 +651,13 @@ void lora_transmit_task(void *param) {
     static const char *TAG = "lora_tx";
     file_server_client_t *client = ol_create_file_client();
 
-    mount_sdcard();
+    //mount_sdcard();
     while(1){
-        //if (ol_send_file_buffer(client, OL_BORDER_ROUTER_ADDR, "teste.txt", (uint8_t *)test_file, strlen(test_file), true, portMAX_DELAY) == pdTRUE) {
-        if (ol_send_file(client, OL_BORDER_ROUTER_ADDR, SD_MOUNT_POINT, "teste.txt", true, portMAX_DELAY) == pdTRUE) {
-            ESP_LOGI(TAG, "Transmitted file: teste.txt of size: 625");
+        if (ol_send_file_buffer(client, OL_BORDER_ROUTER_ADDR, "teste.txt", (uint8_t *)test_file, strlen(test_file), false, portMAX_DELAY) == pdTRUE) {
+        //if (ol_send_file(client, OL_BORDER_ROUTER_ADDR, SD_MOUNT_POINT, "teste.txt", true, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG, "Transmitted file: teste.txt");
         }else{
-            ESP_LOGI(TAG, "Fail to transmit file: teste.txt of size: 625");
+            ESP_LOGI(TAG, "Fail to transmit file: teste.txt");
         }
         vTaskDelay(5000);
     }
