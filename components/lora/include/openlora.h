@@ -133,8 +133,10 @@ typedef struct __attribute__((packed, aligned(1))) {
 
 typedef enum __attribute__((packed)) {
     FILE_START_PACKET = 1,
+    FILE_START_COMPRESS_PACKET,
     FILE_DATA_PACKET,
-    FILE_END_PACKET
+    FILE_END_PACKET,
+    FILE_END_COMPRESS_PACKET
 }file_data_packet_type_t;
 
 typedef struct __attribute__((packed, aligned(1))) {
@@ -160,7 +162,7 @@ int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint
 
 file_server_client_t *ol_create_file_client(void);
 file_server_client_t *ol_create_file_server(void);
-uint32_t ol_send_file_buffer(file_server_client_t *server_client, uint8_t dst_addr, char *filename, uint8_t *file, uint32_t file_size, uint32_t segment_timeout);
+uint32_t ol_send_file_buffer(file_server_client_t *server_client, uint8_t dst_addr, char *filename, uint8_t *file, uint32_t file_size, bool compress, uint32_t segment_timeout);
 uint32_t ol_receive_file_buffer(file_server_client_t *server_client, char *filename, uint8_t *file, uint32_t *file_size, uint32_t segment_timeout);
 uint32_t ol_send_file(file_server_client_t *server_client, uint8_t dst_addr, char *sd_path, char *filename, uint32_t segment_timeout);
 uint32_t ol_receive_file(file_server_client_t *server_client, char *sd_path, char *filename, uint32_t *file_size, uint32_t segment_timeout);

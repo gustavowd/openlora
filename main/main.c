@@ -40,7 +40,7 @@
 
 #define TRANSMITTER 1
 #define RECEIVER    2
-#define MODE TRANSMITTER
+#define MODE RECEIVER
 
 
 #define BOARD_V1        1
@@ -653,7 +653,7 @@ void lora_transmit_task(void *param) {
 
     //mount_sdcard();
     while(1){
-        if (ol_send_file_buffer(client, OL_BORDER_ROUTER_ADDR, "teste.txt", (uint8_t *)test_file, strlen(test_file), portMAX_DELAY) == pdTRUE) {
+        if (ol_send_file_buffer(client, OL_BORDER_ROUTER_ADDR, "teste.txt", (uint8_t *)test_file, strlen(test_file), true, portMAX_DELAY) == pdTRUE) {
         //if (ol_send_file(client, OL_BORDER_ROUTER_ADDR, SD_MOUNT_POINT, "teste.txt", portMAX_DELAY) == pdTRUE) {
             ESP_LOGI(TAG, "Transmitted file: teste.txt of size: 625");
         }else{
@@ -831,11 +831,11 @@ void lora_receive_task_3(void *param) {
 #endif
 
 
-#define CHUNK 192
+#define CHUNK 1019
 
 uint32_t compressBuffer(const char *file, char *dest, uint32_t size) {
     int ret, flush;
-    unsigned have;
+    unsigned int have;
     z_stream strm;
     uint8_t *source = (uint8_t *)file;
     unsigned char out[CHUNK];
@@ -871,7 +871,7 @@ uint32_t compressBuffer(const char *file, char *dest, uint32_t size) {
             memcpy(dest, out, have);
             dest += have;
             total_len += have;
-            //ESP_LOGI(TAG,"Chunk size: %d\n\r", have);
+            ESP_LOGI(TAG,"Chunk size: %d\n\r", have);
         } while (strm.avail_out == 0);
 
         source += len;
@@ -885,7 +885,7 @@ uint32_t compressBuffer(const char *file, char *dest, uint32_t size) {
 
 uint32_t decompressBuffer(char *uncompres, char *compres, int size) {
     int ret;
-    unsigned have;
+    unsigned int have;
     z_stream strm;
     unsigned char out[CHUNK];
 
@@ -961,15 +961,14 @@ void app_main()
     printf("%ldMB %s flash\n", size_flash_chip / (1024 * 1024),
             (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
 
-
-    /*
+    #if 0
     uint32_t len = compressBuffer(test_file, comp, strlen(test_file));
     ESP_LOGI(TAG, "Compress size %ld\n\r", len);
 
     len = decompressBuffer(uncomp, comp, len);
     ESP_LOGI(TAG, "Uncompress size %ld\n\r", len);
     ESP_LOGI(TAG, "%s\n\r", uncomp);
-    */
+    #endif
 
    // Tarefas lora
    // Init LoRa with datarate 4, coding rate 5, channel 0, power level 20dBm, with PA Boost, CRC and explicit header
@@ -978,13 +977,13 @@ void app_main()
         // init openlora stack
         #if MODE == RECEIVER
         if (ol_init(1, OL_BORDER_ROUTER_ADDR) == pdTRUE){
-            xTaskCreate(lora_receive_task, "task_lora_rx1", 3072+2048, NULL, 4, NULL);
+            xTaskCreate(lora_receive_task, "task_lora_rx1", 3072+2048*2, NULL, 4, NULL);
             //xTaskCreate(lora_receive_task_2, "task_lora_rx2", 2048, NULL, 4, NULL);
             //xTaskCreate(lora_receive_task_3, "task_lora_rx3", 2048, NULL, 4, NULL);
         }
         #else
         if (ol_init(1, 1) == pdTRUE) {
-            xTaskCreate(lora_transmit_task, "task_lora_tx", 2048+1024, NULL, 2, NULL);
+            xTaskCreate(lora_transmit_task, "task_lora_tx", 2048+1024*2, NULL, 2, NULL);
         }
         #endif
    }
