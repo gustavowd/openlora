@@ -885,16 +885,10 @@ uint32_t ol_send_file_buffer(file_server_client_t *server_client, uint8_t dst_ad
             }
         }
 
-        if (compress) {
-            mbedtls_md_update(&ctx, (const unsigned char *) file, len);
-        }else{
-            app_header->payload_size = payload_size;
-            mbedtls_md_update(&ctx, (const unsigned char *) file, payload_size);
-        }
-
         payload = &buffer[sizeof(app_file_data_layer_header_t)];
 
         if (compress){
+            mbedtls_md_update(&ctx, (const unsigned char *) file, len);
             strm.avail_in = len;
             strm.next_in = file;
 
@@ -928,6 +922,8 @@ uint32_t ol_send_file_buffer(file_server_client_t *server_client, uint8_t dst_ad
             seq_num++;
             memset(buffer, 0, FTP_BUFFER_SIZE);
         }else{
+            app_header->payload_size = payload_size;
+            mbedtls_md_update(&ctx, (const unsigned char *) file, payload_size);
             for (int i = 0; i < payload_size; i++) {
                 *payload++ = *file++;
             }
@@ -979,7 +975,7 @@ uint32_t ol_send_file_buffer(file_server_client_t *server_client, uint8_t dst_ad
     return pdTRUE;
 }
 
-uint32_t ol_send_file(file_server_client_t *server_client, uint8_t dst_addr, char *sd_path, char *filename, uint32_t segment_timeout) {
+uint32_t ol_send_file(file_server_client_t *server_client, uint8_t dst_addr, char *sd_path, char *filename, bool compress, uint32_t segment_timeout) {
     char path_filename[32];
     strcpy(path_filename, sd_path);
     strcat(path_filename, "/");
@@ -1007,7 +1003,11 @@ uint32_t ol_send_file(file_server_client_t *server_client, uint8_t dst_addr, cha
     app_file_data_layer_header_t *app_header = (app_file_data_layer_header_t *)&buffer;
 
     // first packet send
-    app_header->app_packet_type = FILE_START_PACKET;
+    if (compress){
+        app_header->app_packet_type = FILE_START_COMPRESS_PACKET;
+    }else{
+        app_header->app_packet_type = FILE_START_PACKET;
+    }
     app_header->seq_number = seq_num;
     app_header->payload_size = strlen(filename) + 5;  // 4 = filesize + 1 str end character
 
@@ -1037,6 +1037,17 @@ uint32_t ol_send_file(file_server_client_t *server_client, uint8_t dst_addr, cha
     seq_num++;
     memset(buffer, 0, FTP_BUFFER_SIZE);
 
+    z_stream strm;
+    int ret, flush;
+    if (compress){
+        // Initialize the zlib stream for compression
+        strm.zalloc = Z_NULL;
+        strm.zfree = Z_NULL;
+        strm.opaque = Z_NULL;
+        ret = deflateInit(&strm, Z_BEST_COMPRESSION);
+        if (ret != Z_OK) return pdFALSE;
+    }
+
     uint32_t fsize = (uint32_t)st.st_size;
     uint16_t payload_size = 0;
 
@@ -1045,45 +1056,98 @@ uint32_t ol_send_file(file_server_client_t *server_client, uint8_t dst_addr, cha
         app_header->app_packet_type = FILE_DATA_PACKET;
         app_header->seq_number = seq_num;
         if (fsize >= FTP_MAX_PAYLOAD_SIZE){
-            payload_size = FTP_MAX_PAYLOAD_SIZE;
+            if (compress){
+                len = FTP_MAX_PAYLOAD_SIZE;
+                flush = Z_NO_FLUSH;
+            }else{
+                payload_size = FTP_MAX_PAYLOAD_SIZE;
+            }
         }else {
-            payload_size = (uint16_t)fsize;
+            if (compress){
+                len = (uint16_t)fsize;
+                flush = Z_FINISH;
+            }else{
+                payload_size = (uint16_t)fsize;
+            }
         }
-        app_header->payload_size = payload_size;
+        
+        if (compress){
+            uint8_t read_file[FTP_MAX_PAYLOAD_SIZE];
+            uint32_t bytes_read = (uint32_t)fread((void *)read_file, 1, len, file);
+            //ESP_LOGI(OPEN_LORA_TAG, "Read %ld bytes with content %s", bytes_read, read_file);
+            if (bytes_read == len) {
+                mbedtls_md_update(&ctx, (const unsigned char *) read_file, len);
+                strm.avail_in = len;
+                strm.next_in = read_file;
 
+                // Run deflate() on input until output buffer not full
+                unsigned int have;
+                app_header->payload_size = 0;
+                uint8_t *payload_tmp = &buffer[sizeof(app_file_data_layer_header_t)];
+                do {
+                    strm.avail_out = FTP_MAX_PAYLOAD_SIZE;
+                    strm.next_out = payload_tmp;
+                    ret = deflate(&strm, flush);
+                    assert(ret != Z_STREAM_ERROR);
+                    have = FTP_MAX_PAYLOAD_SIZE - strm.avail_out;
+                    //memcpy(payload_tmp, out, have);
+                    payload_tmp += have;
+                    app_header->payload_size += have;
+                    ESP_LOGI("TAG","Chunk size: %d, payload_size: %d, %d\n\r", have, app_header->payload_size, strm.avail_out);
+                } while (strm.avail_out == 0);
 
-        payload = &buffer[sizeof(app_file_data_layer_header_t)];
-        uint32_t bytes_read = (uint32_t)fread((void *)payload, 1, payload_size, file);
-        //ESP_LOGI(OPEN_LORA_TAG, "Read %ld bytes with content %s", bytes_read, buffer);
-        if (bytes_read == payload_size) {
-            mbedtls_md_update(&ctx, (const unsigned char *) payload, payload_size);
-            payload = &buffer[sizeof(app_file_data_layer_header_t)];
-            for (int i = 0; i < payload_size; i++) {
-                *payload++ = buffer[i];
+                uint16_t len_to_send = app_header->payload_size + sizeof(app_file_data_layer_header_t);
+                //ESP_LOGI("TAG","payload_size: %d\n\r", app_header->payload_size);
+                sent = ol_transp_send(&server_client->transp_handler, buffer, len_to_send, segment_timeout);
+                if (sent != len_to_send){
+                    mbedtls_md_free(&ctx);
+                    (void)deflateEnd(&strm);
+                    fclose(file);
+                    return pdFALSE;
+                }
+                fsize -= len;
+                seq_num++;
+                memset(buffer, 0, FTP_BUFFER_SIZE);
+            }else{
+                mbedtls_md_free(&ctx);
+                (void)deflateEnd(&strm);
+                fclose(file);
+                return pdFALSE;
             }
         }else{
-            mbedtls_md_free(&ctx);
-            fclose(file);
-            return pdFALSE;
-        }
+            payload = &buffer[sizeof(app_file_data_layer_header_t)];
+            uint32_t bytes_read = (uint32_t)fread((void *)payload, 1, payload_size, file);
+            //ESP_LOGI(OPEN_LORA_TAG, "Read %ld bytes with content %s", bytes_read, payload);
+            if (bytes_read == payload_size) {
+                app_header->payload_size = payload_size;
+                mbedtls_md_update(&ctx, (const unsigned char *) payload, payload_size);
 
-        //ESP_LOGI(OPEN_LORA_TAG, "payload size %d", app_header->payload_size);
-        len = app_header->payload_size + sizeof(app_file_data_layer_header_t);
-        //ESP_LOGI(OPEN_LORA_TAG, "Sending %d bytes using OpenLoRa", len);
-        sent = ol_transp_send(&server_client->transp_handler, buffer, len, segment_timeout);
-        if (sent != len){
-            mbedtls_md_free(&ctx);
-            fclose(file);
-            return pdFALSE;
+                len = app_header->payload_size + sizeof(app_file_data_layer_header_t);
+                sent = ol_transp_send(&server_client->transp_handler, buffer, len, segment_timeout);
+                if (sent != len){
+                    mbedtls_md_free(&ctx);
+                    fclose(file);
+                    return pdFALSE;
+                }
+                fsize -= (sent-sizeof(app_file_data_layer_header_t));
+                seq_num++;
+                memset(buffer, 0, FTP_BUFFER_SIZE);
+            }else{
+                mbedtls_md_free(&ctx);
+                fclose(file);
+                return pdFALSE;
+            }
         }
-        fsize -= (sent-sizeof(app_file_data_layer_header_t));
-        seq_num++;
-        memset(buffer, 0, FTP_BUFFER_SIZE);
-        //ESP_LOGI(OPEN_LORA_TAG, "File size %d", fsize);
     }while(fsize);
 
     // last packet send
-    app_header->app_packet_type = FILE_END_PACKET;
+    if (compress){
+        // Clean up
+        (void)deflateEnd(&strm);
+        app_header->app_packet_type = FILE_END_COMPRESS_PACKET;
+    }else{
+        app_header->app_packet_type = FILE_END_PACKET;
+    }
     app_header->seq_number = seq_num;
     app_header->payload_size = 64+8;
 
