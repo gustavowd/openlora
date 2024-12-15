@@ -201,6 +201,13 @@ void mount_sdcard(void)
     slot_config.gpio_cs = CONFIG_EXAMPLE_SPI_CS_GPIO;
     slot_config.host_id = host.slot;
 
+    // GPIOs 2, 12, 13, 14, 15 should have external 10k pull-ups.
+    // Internal pull-ups are not sufficient. However, enabling internal pull-ups
+    // does make a difference some boards, so we do that here.
+    gpio_set_pull_mode(CONFIG_SPI_MOSI_GPIO, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(CONFIG_SPI_MISO_GPIO, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(CONFIG_SPI_CS_GPIO, GPIO_PULLUP_ONLY);
+
     ret = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot_config, &mount_config, &card);
     #endif
 
@@ -218,11 +225,11 @@ void mount_sdcard(void)
     // GPIOs 2, 12, 13, 14, 15 should have external 10k pull-ups.
     // Internal pull-ups are not sufficient. However, enabling internal pull-ups
     // does make a difference some boards, so we do that here.
-    gpio_set_pull_mode(CONFIG_SPI_MOSI_GPIO, GPIO_PULLUP_ONLY);   // CMD, needed in 4- and 1- line modes
-    gpio_set_pull_mode(CONFIG_SPI_MISO_GPIO, GPIO_PULLUP_ONLY);    // D0, needed in 4- and 1-line modes
-    //gpio_set_pull_mode(14, GPIO_PULLUP_ONLY);    // D1, needed in 4-line mode only
-    //gpio_set_pull_mode(12, GPIO_PULLUP_ONLY);   // D2, needed in 4-line mode only
-    gpio_set_pull_mode(CONFIG_SPI_CS_GPIO, GPIO_PULLUP_ONLY);   // D3, needed in 4- and 1-line modes
+    gpio_set_pull_mode(CONFIG_SPI_MOSI_GPIO, GPIO_PULLUP_ONLY);     // CMD, needed in 4- and 1- line modes
+    gpio_set_pull_mode(CONFIG_SPI_MISO_GPIO, GPIO_PULLUP_ONLY);     // D0 or DAT, needed in 4- and 1-line modes
+    //gpio_set_pull_mode(14, GPIO_PULLUP_ONLY);                     // D1, needed in 4-line mode only
+    //gpio_set_pull_mode(12, GPIO_PULLUP_ONLY);                     // D2, needed in 4-line mode only
+    gpio_set_pull_mode(CONFIG_SPI_CS_GPIO, GPIO_PULLUP_ONLY);       // D3 or RES, needed in 4- and 1-line modes
 
     ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot_config, &mount_config, &card);
     #endif
