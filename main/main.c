@@ -94,6 +94,8 @@
 #define SDCARD_MMC  2
 #define SDCARD_IF   SDCARD_MMC
 
+#define SDCARD_BUS_WIDTH 1
+
 #define FLAC_FILE    1
 #define FLAC_STREAM  2
 #define FLAC_FILE_OR_STREAM   FLAC_FILE
@@ -220,16 +222,18 @@ void mount_sdcard(void)
     sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
 
     // To use 1-line SD mode, uncomment the following line:
-    slot_config.width = 1;
+    slot_config.width = SDCARD_BUS_WIDTH;
 
     // GPIOs 2, 12, 13, 14, 15 should have external 10k pull-ups.
     // Internal pull-ups are not sufficient. However, enabling internal pull-ups
     // does make a difference some boards, so we do that here.
     gpio_set_pull_mode(CONFIG_SPI_MOSI_GPIO, GPIO_PULLUP_ONLY);     // CMD, needed in 4- and 1- line modes
     gpio_set_pull_mode(CONFIG_SPI_MISO_GPIO, GPIO_PULLUP_ONLY);     // D0 or DAT, needed in 4- and 1-line modes
-    //gpio_set_pull_mode(14, GPIO_PULLUP_ONLY);                     // D1, needed in 4-line mode only
-    //gpio_set_pull_mode(12, GPIO_PULLUP_ONLY);                     // D2, needed in 4-line mode only
     gpio_set_pull_mode(CONFIG_SPI_CS_GPIO, GPIO_PULLUP_ONLY);       // D3 or RES, needed in 4- and 1-line modes
+    #if (SDCARD_BUS_WIDTH == 4)
+    gpio_set_pull_mode(14, GPIO_PULLUP_ONLY);                     // D1, needed in 4-line mode only
+    gpio_set_pull_mode(12, GPIO_PULLUP_ONLY);                     // D2, needed in 4-line mode only
+    #endif
 
     ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot_config, &mount_config, &card);
     #endif
