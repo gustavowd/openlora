@@ -231,8 +231,8 @@ void mount_sdcard(void)
     gpio_set_pull_mode(CONFIG_SPI_MISO_GPIO, GPIO_PULLUP_ONLY);     // D0 or DAT, needed in 4- and 1-line modes
     gpio_set_pull_mode(CONFIG_SPI_CS_GPIO, GPIO_PULLUP_ONLY);       // D3 or RES, needed in 4- and 1-line modes
     #if (SDCARD_BUS_WIDTH == 4)
-    gpio_set_pull_mode(14, GPIO_PULLUP_ONLY);                     // D1, needed in 4-line mode only
-    gpio_set_pull_mode(12, GPIO_PULLUP_ONLY);                     // D2, needed in 4-line mode only
+    gpio_set_pull_mode(4, GPIO_PULLUP_ONLY);                        // D1, needed in 4-line mode only
+    gpio_set_pull_mode(12, GPIO_PULLUP_ONLY);                       // D2, needed in 4-line mode only
     #endif
 
     ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot_config, &mount_config, &card);
