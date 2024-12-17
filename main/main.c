@@ -94,7 +94,7 @@
 #define SDCARD_MMC  2
 #define SDCARD_IF   SDCARD_MMC
 
-#define SDCARD_BUS_WIDTH 1
+#define SDCARD_BUS_WIDTH 4
 
 #define FLAC_FILE    1
 #define FLAC_STREAM  2
