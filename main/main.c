@@ -184,9 +184,9 @@ void mount_sdcard(void)
 
     #if (SDCARD_IF == SDCARD_SPI)
     spi_bus_config_t bus_cfg = {
-        .mosi_io_num = CONFIG_EXAMPLE_SPI_MOSI_GPIO,
-        .miso_io_num = CONFIG_EXAMPLE_SPI_MISO_GPIO,
-        .sclk_io_num = CONFIG_EXAMPLE_SPI_SCLK_GPIO,
+        .mosi_io_num = CONFIG_SPI_MOSI_GPIO,
+        .miso_io_num = CONFIG_SPI_MISO_GPIO,
+        .sclk_io_num = CONFIG_SPI_SCLK_GPIO,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
         .max_transfer_sz = 4092,
@@ -200,7 +200,7 @@ void mount_sdcard(void)
     // This initializes the slot without card detect (CD) and write protect (WP) signals.
     // Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.gpio_cs = CONFIG_EXAMPLE_SPI_CS_GPIO;
+    slot_config.gpio_cs = CONFIG_SPI_CS_GPIO;
     slot_config.host_id = host.slot;
 
     // GPIOs 2, 12, 13, 14, 15 should have external 10k pull-ups.
