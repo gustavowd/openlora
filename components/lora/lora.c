@@ -8,11 +8,7 @@
 #include <esp_log.h>
 #include "lora.h"
 
-//#define CONFIG_CS_GPIO 18
-#define CONFIG_RST_GPIO 23 //14   //TTGO_BEAM usa reset no pino 23 // outros módulos no pino 14
-//#define CONFIG_MISO_GPIO 19
-//#define CONFIG_MOSI_GPIO 27
-//#define CONFIG_SCK_GPIO 5
+//#define CONFIG_RST_GPIO 23 //14   //TTGO_BEAM usa reset no pino 23 // outros módulos no pino 14
 
 /*
  * Register definitions
@@ -994,7 +990,7 @@ void lora_enable_irq( void )
       return;
    }
 
-   if (xTaskCreate(task_irq, "LoRa IRQ Task", 2048, NULL, 30, &task_lora_irq) != pdTRUE) {
+   if (xTaskCreate(task_irq, "LoRa IRQ Task", 2048, NULL, 24, &task_lora_irq) != pdTRUE) {
       #if VERBOSE != 0
       ESP_LOGI( LORA_TAG, "Error - no HEAP to allocate IRQ Task.\n" );
       #endif
