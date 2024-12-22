@@ -869,18 +869,18 @@ uint32_t ol_send_file_buffer(file_server_client_t *server_client, uint8_t dst_ad
         // data packets
         app_header->app_packet_type = FILE_DATA_PACKET;
         app_header->seq_number = seq_num;
-        if (fsize >= FTP_MAX_PAYLOAD_SIZE){
-            if (compress){
-                len = FTP_MAX_PAYLOAD_SIZE;
+        if (compress){
+            if (fsize >= FTP_MAX_READ_FILE_BEFORE_COMPRESSION){
+                len = FTP_MAX_READ_FILE_BEFORE_COMPRESSION;
                 flush = Z_NO_FLUSH;
-            }else{
-                payload_size = FTP_MAX_PAYLOAD_SIZE;
-            }
-        }else {
-            if (compress){
+            }else {
                 len = (uint16_t)fsize;
                 flush = Z_FINISH;
-            }else{
+            }
+        }else{
+            if (fsize >= FTP_MAX_PAYLOAD_SIZE){
+                payload_size = FTP_MAX_PAYLOAD_SIZE;
+            }else {
                 payload_size = (uint16_t)fsize;
             }
         }
@@ -893,21 +893,22 @@ uint32_t ol_send_file_buffer(file_server_client_t *server_client, uint8_t dst_ad
             strm.next_in = file;
 
             // Run deflate() on input until output buffer not full
-            uint8_t out[FTP_MAX_PAYLOAD_SIZE];
+            //uint8_t out[FTP_MAX_PAYLOAD_SIZE];
             unsigned int have;
             app_header->payload_size = 0;
             uint8_t *payload_tmp = &buffer[sizeof(app_file_data_layer_header_t)];
-            do {
+            //do {
                 strm.avail_out = FTP_MAX_PAYLOAD_SIZE;
-                strm.next_out = out;
+                strm.next_out = payload_tmp;
                 ret = deflate(&strm, flush);
                 assert(ret != Z_STREAM_ERROR);
                 have = FTP_MAX_PAYLOAD_SIZE - strm.avail_out;
-                memcpy(payload_tmp, out, have);
-                payload_tmp += have;
-                app_header->payload_size += have;
+                //memcpy(payload_tmp, out, have);
+                //payload_tmp += have;
+                //app_header->payload_size += have;
+                app_header->payload_size = have;
                 //ESP_LOGI("TAG","Chunk size: %d, payload_size: %d, %d\n\r", have, app_header->payload_size, strm.avail_out);
-            } while (strm.avail_out == 0);
+            //} while (strm.avail_out == 0);
             file += len;
 
             uint16_t len_to_send = app_header->payload_size + sizeof(app_file_data_layer_header_t);
@@ -1055,24 +1056,24 @@ uint32_t ol_send_file(file_server_client_t *server_client, uint8_t dst_addr, cha
         // data packets
         app_header->app_packet_type = FILE_DATA_PACKET;
         app_header->seq_number = seq_num;
-        if (fsize >= FTP_MAX_PAYLOAD_SIZE){
-            if (compress){
-                len = FTP_MAX_PAYLOAD_SIZE;
+        if (compress){
+            if (fsize >= FTP_MAX_READ_FILE_BEFORE_COMPRESSION){
+                len = FTP_MAX_READ_FILE_BEFORE_COMPRESSION;
                 flush = Z_NO_FLUSH;
-            }else{
-                payload_size = FTP_MAX_PAYLOAD_SIZE;
-            }
-        }else {
-            if (compress){
+            }else {
                 len = (uint16_t)fsize;
                 flush = Z_FINISH;
-            }else{
+            }
+        }else{
+            if (fsize >= FTP_MAX_PAYLOAD_SIZE){
+                payload_size = FTP_MAX_PAYLOAD_SIZE;
+            }else {
                 payload_size = (uint16_t)fsize;
             }
         }
         
         if (compress){
-            uint8_t read_file[FTP_MAX_PAYLOAD_SIZE];
+            uint8_t read_file[FTP_MAX_READ_FILE_BEFORE_COMPRESSION];
             uint32_t bytes_read = (uint32_t)fread((void *)read_file, 1, len, file);
             //ESP_LOGI(OPEN_LORA_TAG, "Read %ld bytes with content %s", bytes_read, read_file);
             if (bytes_read == len) {
@@ -1084,17 +1085,18 @@ uint32_t ol_send_file(file_server_client_t *server_client, uint8_t dst_addr, cha
                 unsigned int have;
                 app_header->payload_size = 0;
                 uint8_t *payload_tmp = &buffer[sizeof(app_file_data_layer_header_t)];
-                do {
+                //do {
                     strm.avail_out = FTP_MAX_PAYLOAD_SIZE;
                     strm.next_out = payload_tmp;
                     ret = deflate(&strm, flush);
                     assert(ret != Z_STREAM_ERROR);
                     have = FTP_MAX_PAYLOAD_SIZE - strm.avail_out;
                     //memcpy(payload_tmp, out, have);
-                    payload_tmp += have;
-                    app_header->payload_size += have;
+                    //payload_tmp += have;
+                    //app_header->payload_size += have;
+                    app_header->payload_size = have;
                     ESP_LOGI("TAG","Chunk size: %d, payload_size: %d, %d\n\r", have, app_header->payload_size, strm.avail_out);
-                } while (strm.avail_out == 0);
+                //} while (strm.avail_out == 0);
 
                 uint16_t len_to_send = app_header->payload_size + sizeof(app_file_data_layer_header_t);
                 //ESP_LOGI("TAG","payload_size: %d\n\r", app_header->payload_size);

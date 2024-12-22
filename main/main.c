@@ -662,16 +662,61 @@ void lora_transmit_task(void *param) {
     static const char *TAG = "lora_tx";
     file_server_client_t *client = ol_create_file_client();
 
-    //mount_sdcard();
+    #if 0
+    mount_sdcard();
     while(1){
-        if (ol_send_file_buffer(client, OL_BORDER_ROUTER_ADDR, "teste.txt", (uint8_t *)test_file, strlen(test_file), false, portMAX_DELAY) == pdTRUE) {
-        //if (ol_send_file(client, OL_BORDER_ROUTER_ADDR, SD_MOUNT_POINT, "teste.txt", true, portMAX_DELAY) == pdTRUE) {
+        vTaskDelay(15000);
+        #if 0
+        init_microphone();
+        ESP_LOGI(TAG, "Starting recording for %d seconds!", CONFIG_REC_TIME);
+        record_wav(CONFIG_REC_TIME);
+        // Stop I2S driver and destroy
+        ESP_ERROR_CHECK(i2s_channel_disable(rx_handle));
+        ESP_ERROR_CHECK(i2s_del_channel(rx_handle));
+        #endif
+
+        struct file_io * p = (struct file_io *) malloc(sizeof(struct file_io));
+        // Open wav
+        p->input = open_file(SD_MOUNT_POINT"/record.wav", "r");
+        // Open flac (if it does not exists, will be created)
+        p->output = open_file(SD_MOUNT_POINT"/compress.flc", "w+");
+
+        if ((p->input == NULL) || (p->output == NULL)){
+            ESP_LOGI(TAG, "Fail to open file to compress!");
+            vTaskDelete(NULL);
+        }
+
+        flac_encode((void *)p);
+        if (ol_send_file(client, OL_BORDER_ROUTER_ADDR, SD_MOUNT_POINT, "compress.flc", false, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG, "Transmitted file: teste.txt");
+        }else{
+            ESP_LOGI(TAG, "Fail to transmit file: teste.txt");
+        }
+    }
+    #endif
+
+    #if 1
+    mount_sdcard();
+    while(1){
+        if (ol_send_file(client, OL_BORDER_ROUTER_ADDR, SD_MOUNT_POINT, "teste.txt", true, portMAX_DELAY) == pdTRUE) {
             ESP_LOGI(TAG, "Transmitted file: teste.txt");
         }else{
             ESP_LOGI(TAG, "Fail to transmit file: teste.txt");
         }
         vTaskDelay(5000);
     }
+    #endif
+
+    #if 0
+    while(1){
+        if (ol_send_file_buffer(client, OL_BORDER_ROUTER_ADDR, "teste.txt", (uint8_t *)test_file, strlen(test_file), false, portMAX_DELAY) == pdTRUE) {
+            ESP_LOGI(TAG, "Transmitted file: teste.txt");
+        }else{
+            ESP_LOGI(TAG, "Fail to transmit file: teste.txt");
+        }
+        vTaskDelay(5000);
+    }
+    #endif
 
     #if 0
     //uint16_t cnt = 0;
@@ -746,10 +791,10 @@ void lora_receive_task(void *param) {
     memset(file, 0, 640*2);
 
     ESP_LOGI(TAG, "Welcome to OpenLoRa File Transfer protocol server!");
-    //mount_sdcard();
+    mount_sdcard();
     while(1){
-        if (ol_receive_file_buffer(server, filename, (uint8_t *)file, &filesize, portMAX_DELAY) == pdTRUE){
-        //if (ol_receive_file(server, SD_MOUNT_POINT, filename, &filesize, portMAX_DELAY) == pdTRUE){
+        //if (ol_receive_file_buffer(server, filename, (uint8_t *)file, &filesize, portMAX_DELAY) == pdTRUE){
+        if (ol_receive_file(server, SD_MOUNT_POINT, filename, &filesize, portMAX_DELAY) == pdTRUE){
             ESP_LOGI(TAG, "Received file: %s of size: %ld", filename, filesize);
             file[filesize] = '\0';
             ESP_LOGI(TAG, "%s", file);
@@ -994,7 +1039,7 @@ void app_main()
         }
         #else
         if (ol_init(1, 1) == pdTRUE) {
-            xTaskCreate(lora_transmit_task, "task_lora_tx", 2048+1024*3, NULL, 2, NULL);
+            xTaskCreate(lora_transmit_task, "task_lora_tx", 2048+1024*6, NULL, 2, NULL);
         }
         #endif
    }

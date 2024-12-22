@@ -146,6 +146,7 @@ typedef struct __attribute__((packed, aligned(1))) {
 }app_file_data_layer_header_t;
 
 #define FTP_MAX_PAYLOAD_SIZE FTP_BUFFER_SIZE-sizeof(app_file_data_layer_header_t)
+#define FTP_MAX_READ_FILE_BEFORE_COMPRESSION  FTP_BUFFER_SIZE-160
 
 typedef struct {
     transport_layer_t   transp_handler;
