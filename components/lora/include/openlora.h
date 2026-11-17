@@ -47,7 +47,7 @@ typedef struct openlora_t_ {
     uint8_t  neigh_seq_number[256];
     uint32_t backoff_base_ms;
     uint32_t max_backoof_delay_ms;
-    uint32_t symbol_time;
+    //uint32_t symbol_time;
 }openlora_t;
 
 

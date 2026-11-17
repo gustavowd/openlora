@@ -91,8 +91,11 @@ static BaseType_t ol_init_net_if_buffers(void){
     ol_network_buffer_mutex = xSemaphoreCreateMutex();
     if ((ol_available_network_buffer != NULL) && (ol_network_buffer_mutex != NULL)){
         return pdPASS;
+    }else{
+        if (ol_available_network_buffer != NULL) vSemaphoreDelete(ol_available_network_buffer);
+        if (ol_network_buffer_mutex != NULL) vSemaphoreDelete(ol_network_buffer_mutex);
+        return pdFAIL;
     }
-    return pdFAIL;
 }
 
 static net_if_buffer_descriptor_t *ol_get_net_if_buffer(uint8_t size, uint32_t timeout){
@@ -321,6 +324,9 @@ static void ol_receive_link_frame(uint32_t timeout){
                 link_layer_trailer_t *link_frame_trailer = (link_layer_trailer_t *)&net_if_buffer->puc_link_buffer[sizeof(link_layer_header_t)+link_frame_header->payload_size];
                 uint16_t crc = usLORACRC16(net_if_buffer->puc_link_buffer, (net_if_buffer->data_length - sizeof(link_layer_trailer_t)));
                 if (link_frame_trailer->crc == crc) {
+                    /* Se for um frame de dados, a identificação de rede for a mesma iniciada e o endereço de destino for o mesmo do nó,
+                     * então envia um ack e envia para a camada de transporte
+                     */
                     if ((link_frame_header->frame_type == DATA_FRAME) && (link_frame_header->network_id == openlora.nwk_id) && (link_frame_header->dst_addr == openlora.node_addr)) {
                         if (ol_send_link_ack(link_frame_header, LINK_ACK_TIMEOUT) == pdTRUE) {
                             if (openlora.neigh_seq_number[link_frame_header->src_addr] != link_frame_header->seq_number) {
@@ -376,9 +382,9 @@ static BaseType_t ol_from_link_layer(net_if_buffer_descriptor_t **buffer, TickTy
 static BaseType_t ol_from_transport_layer(net_if_buffer_descriptor_t **buffer, TickType_t timeout);
 
 static void ol_link_layer_task(void *arg) {
-    // esperar pacotes das camadas superiores
-    // chegou um pacote do radio
-    // transmitir um pacote (cca, csma/ca, retentativas, ack, ...)
+    // espera pacotes das camadas superiores
+    // espera um frame do radio
+    // transmite um pacote (cca, csma/ca, retentativas, ack, ...)
     static const char *TAG = "ol_link_layer";
     bool is_queue_full = false;
 
@@ -434,7 +440,7 @@ static void ol_link_layer_task(void *arg) {
                 ESP_LOGI(TAG, "Fail to sent the frame to the radio!");
             }else {
                 if (frame->packet_ack != NULL){
-                    uint8_t len = frame->data_length - sizeof(link_layer_header_t) -sizeof(link_layer_trailer_t) - sizeof(transport_layer_header_t);
+                    len = frame->data_length - sizeof(link_layer_header_t) -sizeof(link_layer_trailer_t) - sizeof(transport_layer_header_t);
                     xQueueSendToBack(frame->packet_ack, &len, 10);
                 }
             }
@@ -617,6 +623,10 @@ int ol_transp_open(transport_layer_t *client_server){
         client_server->transp_ack = xQueueCreate(1, sizeof(uint8_t));
         if ((client_server->transp_wakeup != NULL) && (client_server->transp_ack != NULL)){
             return pdPASS;
+        }else{
+            if (client_server->transp_wakeup != NULL) vQueueDelete(client_server->transp_wakeup);
+            if (client_server->transp_ack != NULL) vQueueDelete(client_server->transp_ack);
+            return pdFAIL;
         }
     }else {
         if (client_server->transp_wakeup != NULL){
@@ -1181,6 +1191,7 @@ uint32_t ol_receive_file_buffer(file_server_client_t *server_client, char *filen
     uint16_t seq_number = 0;
     uint8_t buffer[FTP_BUFFER_SIZE];
 
+    /* todo: o tamanho do buffer deve ser passado como argumento, pq não pode receber mais de FTP_BUFFER_SIZE bytes */
     int len = ol_transp_recv(&server_client->transp_handler, buffer, segment_timeout);
     app_file_data_layer_header_t *app_header = (app_file_data_layer_header_t *)&buffer;
 
