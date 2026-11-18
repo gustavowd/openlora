@@ -156,11 +156,12 @@ typedef struct {
 BaseType_t ol_init(uint8_t nwk_id, uint8_t addr);
 
 // Transport layer functions
-int ol_transp_open(transport_layer_t *client_server);
+int ol_transp_open(transport_layer_t *server_client);
 int ol_transp_close(transport_layer_t *server_client);
 int ol_transp_recv(transport_layer_t *server_client, uint8_t *buffer, TickType_t timeout);
 int ol_transp_send(transport_layer_t *server_client, const uint8_t *buffer, uint16_t length, TickType_t timeout);
 
+// File transfer protocol functions
 file_server_client_t *ol_create_file_client(void);
 file_server_client_t *ol_create_file_server(void);
 uint32_t ol_send_file_buffer(file_server_client_t *server_client, uint8_t dst_addr, char *filename, uint8_t *file, uint32_t file_size, bool compress, uint32_t segment_timeout);

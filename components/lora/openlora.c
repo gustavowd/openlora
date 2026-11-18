@@ -611,25 +611,25 @@ static void ol_transport_layer_task(void *arg) {
 }
 
 
-int ol_transp_open(transport_layer_t *client_server){
-	ol_transp_include_client_or_server(client_server);
+int ol_transp_open(transport_layer_t *server_client){
+	ol_transp_include_client_or_server(server_client);
     
     //Create a reception queue
-    client_server->transp_wakeup = xQueueCreate(1, sizeof(net_if_buffer_descriptor_t *));
+    server_client->transp_wakeup = xQueueCreate(1, sizeof(net_if_buffer_descriptor_t *));
 
 
-    if (client_server->protocol == TRANSP_STREAM) {
+    if (server_client->protocol == TRANSP_STREAM) {
         // Ack queue for the streaming protocol
-        client_server->transp_ack = xQueueCreate(1, sizeof(uint8_t));
-        if ((client_server->transp_wakeup != NULL) && (client_server->transp_ack != NULL)){
+        server_client->transp_ack = xQueueCreate(1, sizeof(uint8_t));
+        if ((server_client->transp_wakeup != NULL) && (server_client->transp_ack != NULL)){
             return pdPASS;
         }else{
-            if (client_server->transp_wakeup != NULL) vQueueDelete(client_server->transp_wakeup);
-            if (client_server->transp_ack != NULL) vQueueDelete(client_server->transp_ack);
+            if (server_client->transp_wakeup != NULL) vQueueDelete(server_client->transp_wakeup);
+            if (server_client->transp_ack != NULL) vQueueDelete(server_client->transp_ack);
             return pdFAIL;
         }
     }else {
-        if (client_server->transp_wakeup != NULL){
+        if (server_client->transp_wakeup != NULL){
             return pdPASS;
         }
     }
